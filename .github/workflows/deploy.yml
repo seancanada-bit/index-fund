@@ -10,8 +10,9 @@ jobs:
   deploy-frontend:
     name: Build & Deploy Frontend to cPanel
     runs-on: ubuntu-latest
-    # Only run when frontend files change
+    # Run on manual trigger, or on push when frontend files changed
     if: |
+      github.event_name == 'workflow_dispatch' ||
       contains(toJson(github.event.commits.*.modified), 'frontend/') ||
       contains(toJson(github.event.commits.*.added), 'frontend/')
 
