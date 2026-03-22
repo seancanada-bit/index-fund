@@ -395,6 +395,7 @@ ForecastCard.propTypes = {
     rank_5y: PropTypes.number,
     fundamental_score_1y: PropTypes.number,
     fundamental_score_5y: PropTypes.number,
+    investment_scenarios: PropTypes.object,
     technical: PropTypes.object,
     macro: PropTypes.object,
     sentiment: PropTypes.object,
