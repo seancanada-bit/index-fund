@@ -4,17 +4,14 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'frontend/**'
   workflow_dispatch:  # allows manual trigger from GitHub Actions tab
 
 jobs:
   deploy-frontend:
     name: Build & Deploy Frontend to cPanel
     runs-on: ubuntu-latest
-    # Run on manual trigger, or on push when frontend files changed
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      contains(toJson(github.event.commits.*.modified), 'frontend/') ||
-      contains(toJson(github.event.commits.*.added), 'frontend/')
 
     steps:
       - name: Checkout repository
