@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #0a0e1a;
+    color: #e5e7eb;
+    font-family: 'DM Sans', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #111827;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #4b5563;
+  }
+}
+
+@layer utilities {
+  .font-mono-data {
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .text-bullish {
+    color: #10b981;
+  }
+
+  .text-bearish {
+    color: #ef4444;
+  }
+
+  .text-neutral-sentiment {
+    color: #f59e0b;
+  }
+
+  .bg-card {
+    background-color: #111827;
+    border: 1px solid #1f2937;
+  }
+
+  .glow-emerald {
+    box-shadow: 0 0 24px rgba(16, 185, 129, 0.18), 0 0 0 1px rgba(16, 185, 129, 0.12);
+  }
+
+  .glow-red {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+  }
+
+  .glow-hero {
+    box-shadow:
+      0 0 40px rgba(16, 185, 129, 0.2),
+      0 0 0 1px rgba(16, 185, 129, 0.2),
+      inset 0 0 40px rgba(16, 185, 129, 0.03);
+  }
+
+  /* Background depth gradients */
+  .bg-depth {
+    background:
+      radial-gradient(ellipse 90% 50% at 15% 0%, rgba(16, 185, 129, 0.055) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 85% 100%, rgba(99, 102, 241, 0.04) 0%, transparent 55%),
+      radial-gradient(ellipse 50% 30% at 50% 50%, rgba(245, 158, 11, 0.02) 0%, transparent 60%);
+  }
+
+  /* Hover sweep gradient on table rows */
+  .row-sweep {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .row-sweep::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.025) 50%,
+      transparent 100%
+    );
+    opacity: 0;
+    transition: opacity 0.25s;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .row-sweep:hover::after {
+    opacity: 1;
+  }
+}

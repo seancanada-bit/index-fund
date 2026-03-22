@@ -1,0 +1,46 @@
+version: '3.9'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: forecaster-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: forecaster-backend-dev
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - redis
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    image: node:20-alpine
+    container_name: forecaster-frontend-dev
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    command: sh -c "npm install && npm start"
+
+volumes:
+  redis_data_dev:

@@ -1,0 +1,40 @@
+{
+  "name": "index-fund-forecaster",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-scripts": "5.0.1",
+    "recharts": "^2.12.7",
+    "framer-motion": "^11.2.12",
+    "prop-types": "^15.8.1"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.4",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.3",
+    "prettier": "^3.3.2"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject",
+    "lint": "eslint src --ext .js,.jsx",
+    "format": "prettier --write src/**/*.{js,jsx,css}"
+  },
+  "eslintConfig": {
+    "extends": ["react-app", "plugin:react/recommended"],
+    "rules": {
+      "react/prop-types": "warn"
+    }
+  },
+  "browserslist": {
+    "production": [">0.2%", "not dead", "not op_mini all"],
+    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
+  },
+  "proxy": "http://backend:8000"
+}

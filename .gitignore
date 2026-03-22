@@ -1,0 +1,29 @@
+# Environment — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+backend/venv/
+backend/.venv/
+*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/build/
+
+# Render config — must stay deleted (overrides dashboard settings)
+backend/render.yaml
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
