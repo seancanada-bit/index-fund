@@ -57,12 +57,12 @@ export default function HeroSection({ onRefresh, refreshing, lastUpdated }) {
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             </div>
             <h1 className="text-4xl sm:text-5xl font-bold text-white leading-tight tracking-tight">
-              7-Day Index Fund
+              Index Fund
               <br />
-              <span className="text-emerald-400">Outlook</span>
+              <span className="text-emerald-400">Intelligence</span>
             </h1>
             <p className="mt-3 text-gray-400 font-sans text-sm max-w-xl">
-              {today} &mdash; Rankings derived from technical indicators, macroeconomic signals, and AI sentiment analysis across news and social media.
+              {today} &mdash; Adaptive AI rankings across 39 US &amp; Canadian ETFs — scored on technical momentum, macroeconomic signals, and market sentiment over 7-day, 30-day, and multi-year horizons.
             </p>
             <p className="mt-1 text-xs text-gray-600 font-sans">
               For informational purposes only. Not financial advice. Past performance does not guarantee future results.
