@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:  # allows manual trigger from GitHub Actions tab
 
 jobs:
   deploy-frontend:
