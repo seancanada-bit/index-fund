@@ -48,11 +48,12 @@ scheduler = BackgroundScheduler()
 _forecast_cache_key = "full_forecast"
 _last_updated: Optional[datetime] = None
 _data_source_status: dict = {}
+_prev_ranks: dict = {}   # {ticker: rank} from last completed forecast cycle
 
 
 def build_forecast_sync() -> dict:
     """Synchronous forecast build — runs in a background thread via APScheduler."""
-    global _last_updated, _data_source_status
+    global _last_updated, _data_source_status, _prev_ranks
     logger.info("Building forecast for all tickers...")
 
     source_status = {
@@ -191,6 +192,18 @@ def build_forecast_sync() -> dict:
         logger.info("Predictions logged to store.")
     except Exception as e:
         logger.warning(f"log_predictions failed: {e}")
+
+    # Triple Lock alert check — compare ranks against previous cycle
+    try:
+        from alerter import check_and_alert
+        fired = check_and_alert(ranked, _prev_ranks)
+        if fired:
+            logger.info(f"Alerts fired for: {fired}")
+    except Exception as e:
+        logger.warning(f"check_and_alert failed: {e}")
+
+    # Update prev_ranks for next cycle
+    _prev_ranks = {f["ticker"]: f["rank"] for f in ranked}
 
     result = {
         "funds": ranked,

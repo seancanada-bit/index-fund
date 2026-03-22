@@ -65,6 +65,11 @@ def _ensure_tables(conn):
                 sentiment_corr       FLOAT,
                 notes                TEXT
             );
+            CREATE TABLE IF NOT EXISTS alert_log (
+                id          SERIAL PRIMARY KEY,
+                ticker      VARCHAR(10) NOT NULL UNIQUE,
+                alerted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
         """)
         conn.commit()
 
@@ -333,3 +338,44 @@ def get_track_record_stats() -> dict:
         "worst_call": {"ticker": worst["ticker"], "return": round(worst["actual_return"], 2),
                        "rank_at_time": worst["rank"]},
     }
+
+
+# ── Alert cooldown helpers ────────────────────────────────────────────────────
+def get_alert_cooldown(ticker: str):
+    """Return the datetime of the last alert for ticker, or None."""
+    db = _conn()
+    if db:
+        _ensure_tables(db)
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT alerted_at FROM alert_log WHERE ticker = %s", (ticker,)
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+        except Exception as e:
+            logger.error(f"get_alert_cooldown DB error: {e}")
+            return None
+        finally:
+            db.close()
+    return None
+
+
+def set_alert_cooldown(ticker: str, alerted_at: datetime):
+    """Upsert the alert timestamp for ticker."""
+    db = _conn()
+    if db:
+        _ensure_tables(db)
+        try:
+            with db.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO alert_log (ticker, alerted_at)
+                    VALUES (%s, %s)
+                    ON CONFLICT (ticker) DO UPDATE SET alerted_at = EXCLUDED.alerted_at
+                """, (ticker, alerted_at))
+            db.commit()
+        except Exception as e:
+            logger.error(f"set_alert_cooldown DB error: {e}")
+            db.rollback()
+        finally:
+            db.close()
