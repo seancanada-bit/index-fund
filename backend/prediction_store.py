@@ -379,3 +379,90 @@ def set_alert_cooldown(ticker: str, alerted_at: datetime):
             db.rollback()
         finally:
             db.close()
+
+
+# ── In-flight predictions status ──────────────────────────────────────────────
+def get_predictions_status() -> dict:
+    """Return in-flight prediction stats for the UI progress panel."""
+    now = datetime.now(timezone.utc)
+    EVAL_HORIZON = 7  # days
+
+    db = _conn()
+    if db:
+        _ensure_tables(db)
+        try:
+            with db.cursor() as cur:
+                # Total predictions ever logged
+                cur.execute("SELECT COUNT(*) FROM predictions")
+                total = cur.fetchone()[0]
+
+                # Oldest unevaluated prediction (determines days-to-first-result)
+                cur.execute("""
+                    SELECT MIN(p.logged_at) FROM predictions p
+                    LEFT JOIN outcomes o ON o.prediction_id = p.id AND o.horizon_days = 7
+                    WHERE o.id IS NULL
+                """)
+                oldest_row = cur.fetchone()
+                oldest = oldest_row[0] if oldest_row else None
+
+                # Most recent top-3 picks (one row per ticker, latest logged_at)
+                cur.execute("""
+                    SELECT DISTINCT ON (ticker)
+                        ticker, rank, composite_score, price_at_prediction, logged_at
+                    FROM predictions
+                    WHERE rank <= 3
+                    ORDER BY ticker, logged_at DESC
+                """)
+                cols = ["ticker", "rank", "composite_score", "price_at_prediction", "logged_at"]
+                top_picks = []
+                for row in cur.fetchall():
+                    pick = dict(zip(cols, row))
+                    if hasattr(pick.get("logged_at"), "isoformat"):
+                        pick["logged_at"] = pick["logged_at"].isoformat()
+                    top_picks.append(pick)
+
+                # Days until first evaluation
+                days_until = None
+                if oldest:
+                    if oldest.tzinfo is None:
+                        oldest = oldest.replace(tzinfo=timezone.utc)
+                    age_days = (now - oldest).days
+                    days_until = max(0, EVAL_HORIZON - age_days)
+
+                return {
+                    "total_logged": total,
+                    "oldest_prediction": oldest.isoformat() if oldest else None,
+                    "days_until_first_eval": days_until,
+                    "eval_horizon_days": EVAL_HORIZON,
+                    "top_picks_in_flight": sorted(top_picks, key=lambda x: x["rank"]),
+                }
+        except Exception as e:
+            logger.error(f"get_predictions_status DB error: {e}")
+            return {"total_logged": 0, "days_until_first_eval": None, "top_picks_in_flight": []}
+        finally:
+            db.close()
+    else:
+        # In-memory fallback
+        total = len(_predictions)
+        oldest = min((p["logged_at"] for p in _predictions), default=None)
+        days_until = None
+        if oldest:
+            age_days = (now - oldest).days if hasattr(oldest, "days") else 0
+            days_until = max(0, EVAL_HORIZON - age_days)
+        top_recent = sorted(
+            [p for p in _predictions if p.get("rank", 99) <= 3],
+            key=lambda x: x.get("logged_at", now), reverse=True
+        )[:3]
+        picks = []
+        for p in top_recent:
+            pick = {k: v for k, v in p.items()}
+            if hasattr(pick.get("logged_at"), "isoformat"):
+                pick["logged_at"] = pick["logged_at"].isoformat()
+            picks.append(pick)
+        return {
+            "total_logged": total,
+            "oldest_prediction": oldest.isoformat() if oldest and hasattr(oldest, "isoformat") else None,
+            "days_until_first_eval": days_until,
+            "eval_horizon_days": EVAL_HORIZON,
+            "top_picks_in_flight": sorted(picks, key=lambda x: x.get("rank", 99)),
+        }

@@ -48,12 +48,13 @@ scheduler = BackgroundScheduler()
 _forecast_cache_key = "full_forecast"
 _last_updated: Optional[datetime] = None
 _data_source_status: dict = {}
-_prev_ranks: dict = {}   # {ticker: rank} from last completed forecast cycle
+_prev_ranks: dict = {}        # {ticker: rank} from last completed forecast cycle
+_last_log_date: Optional[str] = None  # "YYYY-MM-DD" — log predictions once per day only
 
 
 def build_forecast_sync() -> dict:
     """Synchronous forecast build — runs in a background thread via APScheduler."""
-    global _last_updated, _data_source_status, _prev_ranks
+    global _last_updated, _data_source_status, _prev_ranks, _last_log_date
     logger.info("Building forecast for all tickers...")
 
     source_status = {
@@ -185,11 +186,16 @@ def build_forecast_sync() -> dict:
     _last_updated = datetime.now(timezone.utc)
     _data_source_status = source_status
 
-    # Snapshot this forecast for self-improvement tracking
+    # Snapshot this forecast once per day for self-improvement tracking
     try:
         from prediction_store import log_predictions
-        log_predictions(ranked)
-        logger.info("Predictions logged to store.")
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if _last_log_date != today_str:
+            log_predictions(ranked)
+            _last_log_date = today_str
+            logger.info(f"Daily predictions logged ({today_str}).")
+        else:
+            logger.info("Predictions already logged today — skipping.")
     except Exception as e:
         logger.warning(f"log_predictions failed: {e}")
 
@@ -389,6 +395,17 @@ async def track_record():
     except Exception as e:
         logger.error(f"track_record error: {e}")
         return {"available": False, "error": str(e)}
+
+
+@app.get("/api/predictions-status")
+async def predictions_status():
+    """In-flight prediction count, days-to-first-result, and current top picks."""
+    try:
+        from prediction_store import get_predictions_status
+        return get_predictions_status()
+    except Exception as e:
+        logger.error(f"predictions_status error: {e}")
+        return {"total_logged": 0, "days_until_first_eval": None, "top_picks_in_flight": [], "error": str(e)}
 
 
 @app.get("/api/model-insights")
