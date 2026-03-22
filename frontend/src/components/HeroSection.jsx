@@ -97,7 +97,7 @@ export default function HeroSection({ onRefresh, refreshing, lastUpdated }) {
         {/* Divider */}
         <div className="mt-8 flex items-center gap-3">
           <div className="flex-1 h-px bg-gradient-to-r from-emerald-800/50 via-gray-700 to-transparent" />
-          <span className="font-mono-data text-xs text-gray-600">20 FUNDS TRACKED</span>
+          <span className="font-mono-data text-xs text-gray-600">39 FUNDS TRACKED</span>
           <div className="flex-1 h-px bg-gradient-to-l from-emerald-800/50 via-gray-700 to-transparent" />
         </div>
       </motion.div>
