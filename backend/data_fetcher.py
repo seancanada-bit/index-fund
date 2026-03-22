@@ -452,12 +452,21 @@ def fetch_reddit_sentiment(ticker: str) -> list:
             client_secret=REDDIT_CLIENT_SECRET,
             user_agent=REDDIT_USER_AGENT,
         )
-        subreddits = ["investing", "stocks", "ETFs"]
+        # Broader subreddit coverage — Canadian tickers get CA-specific subs
+        is_canadian = ticker.endswith(".TO")
+        if is_canadian:
+            subreddits = ["investing", "ETFs", "PersonalFinanceCanada", "CanadianInvestor", "CanadaFinance"]
+        else:
+            subreddits = ["investing", "stocks", "ETFs", "Bogleheads", "personalfinance"]
+
+        # Use base ticker for search (strip .TO suffix)
+        search_term = ticker.replace(".TO", "")
         cutoff = datetime.now() - timedelta(hours=48)
+
         for sub_name in subreddits:
             try:
                 sub = reddit.subreddit(sub_name)
-                for post in sub.search(ticker, sort="hot", time_filter="week", limit=20):
+                for post in sub.search(search_term, sort="hot", time_filter="week", limit=15):
                     created = datetime.utcfromtimestamp(post.created_utc)
                     if created >= cutoff:
                         posts.append({
@@ -469,12 +478,132 @@ def fetch_reddit_sentiment(ticker: str) -> list:
                         })
             except Exception as e:
                 logger.warning(f"Reddit subreddit {sub_name} failed for {ticker}: {e}")
-        posts = sorted(posts, key=lambda x: x["score"], reverse=True)[:15]
+
+        posts = sorted(posts, key=lambda x: x["score"], reverse=True)[:20]
     except Exception as e:
         logger.warning(f"Reddit PRAW failed for {ticker}: {e}")
 
     _cache_set(cache_key, json.dumps(posts), 7200)
     return posts
+
+
+def fetch_stocktwits(ticker: str) -> dict:
+    """
+    Fetch StockTwits bullish/bearish message counts — free, no API key needed.
+    Users self-tag posts as Bullish/Bearish making this a clean sentiment signal.
+    """
+    cache_key = f"stocktwits:{ticker}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    # StockTwits uses plain ticker symbols — strip .TO for Canadian funds
+    st_ticker = ticker.replace(".TO", "").replace(".", "-")
+    result = {"bullish": 0, "bearish": 0, "total": 0, "bull_ratio": 0.5, "available": False}
+
+    try:
+        url = f"https://api.stocktwits.com/api/2/streams/symbol/{st_ticker}.json"
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; IndexFundForecaster/2.0)"}
+        resp = requests.get(url, headers=headers, timeout=8)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            messages = data.get("messages", [])
+            bull = sum(
+                1 for m in messages
+                if (m.get("entities") or {}).get("sentiment") and
+                   m["entities"]["sentiment"].get("basic") == "Bullish"
+            )
+            bear = sum(
+                1 for m in messages
+                if (m.get("entities") or {}).get("sentiment") and
+                   m["entities"]["sentiment"].get("basic") == "Bearish"
+            )
+            total = bull + bear
+            result = {
+                "bullish": bull,
+                "bearish": bear,
+                "total": total,
+                "bull_ratio": round(bull / total, 3) if total > 0 else 0.5,
+                "available": total >= 3,   # Only trust if at least 3 tagged messages
+            }
+            logger.info(f"StockTwits {ticker}: {bull} bull / {bear} bear ({total} tagged)")
+        elif resp.status_code == 429:
+            logger.warning(f"StockTwits rate limited for {ticker}")
+        else:
+            logger.debug(f"StockTwits {resp.status_code} for {ticker}")
+    except Exception as e:
+        logger.warning(f"StockTwits fetch failed for {ticker}: {e}")
+
+    _cache_set(cache_key, json.dumps(result), 3600)
+    return result
+
+
+def fetch_av_news_sentiment(ticker: str) -> dict:
+    """
+    Fetch Alpha Vantage News Sentiment endpoint — 25 calls/day on free tier.
+    Cached 24h per ticker to preserve quota. Skips Canadian .TO tickers (poor AV coverage).
+    """
+    if not ALPHA_VANTAGE_KEY:
+        return {"available": False}
+    if ticker.endswith(".TO"):
+        return {"available": False}
+
+    cache_key = f"av_news_sentiment:{ticker}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    result = {"available": False}
+    try:
+        url = (
+            f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT"
+            f"&tickers={ticker}&apikey={ALPHA_VANTAGE_KEY}&limit=50"
+        )
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Detect rate-limit / info messages
+        if "Information" in data or "Note" in data:
+            logger.warning(f"AV News Sentiment quota hit for {ticker}")
+            _cache_set(cache_key, json.dumps(result), 3600)   # Short cache — retry later
+            return result
+
+        feed = data.get("feed", [])
+        if not feed:
+            _cache_set(cache_key, json.dumps(result), 86400)
+            return result
+
+        # Extract per-ticker sentiment; weight by relevance score
+        scores, weights = [], []
+        for article in feed[:50]:
+            for ts in article.get("ticker_sentiment", []):
+                if ts.get("ticker") == ticker:
+                    try:
+                        score = float(ts["ticker_sentiment_score"])
+                        relevance = float(ts.get("relevance_score", 0))
+                        if relevance >= 0.1:
+                            scores.append(score * 100)    # Scale -100 → +100
+                            weights.append(relevance)
+                    except (ValueError, TypeError, KeyError):
+                        pass
+
+        if scores:
+            weighted_avg = sum(s * w for s, w in zip(scores, weights)) / sum(weights)
+            result = {
+                "available": True,
+                "score": round(weighted_avg, 2),
+                "article_count": len(scores),
+                "label": data.get("overall_sentiment_label", "Neutral"),
+            }
+            logger.info(f"AV News Sentiment {ticker}: {result['score']:.1f} ({len(scores)} articles)")
+
+    except Exception as e:
+        logger.warning(f"AV News Sentiment failed for {ticker}: {e}")
+
+    _cache_set(cache_key, json.dumps(result), 86400)    # 24h cache — preserve daily quota
+    return result
 
 
 def invalidate_cache():

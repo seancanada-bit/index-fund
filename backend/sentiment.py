@@ -184,75 +184,132 @@ def _claude_analyze(ticker: str, news_articles: list, reddit_posts: list) -> dic
     raise RuntimeError(f"All Claude retries failed: {last_error}")
 
 
-def analyze_sentiment(ticker: str, news_articles: list, reddit_posts: list,
-                      google_trends: dict = None) -> dict:
-    # Step 1: keyword pre-score
-    raw_score = pre_score_headlines(news_articles, reddit_posts)
+def analyze_sentiment(
+    ticker: str,
+    news_articles: list,
+    reddit_posts: list,
+    google_trends: dict = None,
+    stocktwits: dict = None,
+    av_news: dict = None,
+) -> dict:
+    """
+    Multi-source sentiment blend:
+      1. Keyword scoring   (always available)
+      2. FinBERT           (local model, always attempted)
+      3. StockTwits        (free crowd sentiment — self-tagged bullish/bearish)
+      4. AV News Sentiment (Alpha Vantage pre-scored articles, US tickers only)
+      5. Google Trends     (search interest direction adjustment)
 
-    # Step 2: FinBERT on all headlines (runs locally, always attempted)
-    all_texts = [(a.get("title") or "") + " " + (a.get("description") or "")
-                 for a in news_articles if a.get("title")]
+    Sources are combined using a dynamic weighted average that rewards
+    having more signals available.
+    """
+    sources_used = []
+
+    # ── Step 1: Keyword pre-score ─────────────────────────────────────────────
+    raw_score = pre_score_headlines(news_articles, reddit_posts)
+    sources_used.append("keyword")
+
+    # ── Step 2: FinBERT on all available text ─────────────────────────────────
+    all_texts = [
+        (a.get("title") or "") + " " + (a.get("description") or "")
+        for a in news_articles if a.get("title")
+    ]
     all_texts += [p.get("title", "") for p in reddit_posts if p.get("title")]
     finbert_raw = finbert_score_texts(all_texts)
-    data_source = "finbert+keyword" if finbert_raw is not None else "keyword_fallback"
+    if finbert_raw is not None:
+        sources_used.append("finbert")
 
-    # Step 3: Claude (disabled)
-    claude_result = None
+    # ── Step 3: StockTwits crowd sentiment ────────────────────────────────────
+    # bull_ratio: 0.0 = fully bearish (-100), 0.5 = neutral (0), 1.0 = fully bullish (+100)
+    stocktwits_score = None
+    if stocktwits and stocktwits.get("available") and stocktwits.get("total", 0) >= 3:
+        stocktwits_score = (stocktwits["bull_ratio"] - 0.5) * 200
+        sources_used.append("stocktwits")
 
-    # Step 4: Blend scores
-    if claude_result and finbert_raw is not None:
-        # All three available
-        claude_score = float(claude_result.get("score", 0))
-        final_score = claude_score * 0.50 + finbert_raw * 0.30 + raw_score * 0.20
-        sentiment = claude_result.get("sentiment", "neutral")
-        confidence = claude_result.get("confidence", "medium")
-        key_themes = claude_result.get("key_themes", [])
-        rationale = claude_result.get("rationale", "")
-        risk_flags = claude_result.get("risk_flags", [])
-    elif claude_result:
-        claude_score = float(claude_result.get("score", 0))
-        final_score = claude_score * 0.70 + raw_score * 0.30
-        sentiment = claude_result.get("sentiment", "neutral")
-        confidence = claude_result.get("confidence", "medium")
-        key_themes = claude_result.get("key_themes", [])
-        rationale = claude_result.get("rationale", "")
-        risk_flags = claude_result.get("risk_flags", [])
+    # ── Step 4: Alpha Vantage pre-scored news ─────────────────────────────────
+    av_score = None
+    if av_news and av_news.get("available"):
+        av_score = float(av_news.get("score", 0))
+        sources_used.append("av_news")
+
+    # ── Step 5: Dynamic weighted blend ───────────────────────────────────────
+    # Weights sum to 1.0; FinBERT and AV News anchor the blend when available.
+    #
+    # Priority hierarchy (highest → lowest reliability):
+    #   AV News > FinBERT > StockTwits > Keyword
+    #
+    # Baseline (keyword only): keyword 1.0
+    # +FinBERT:                finbert 0.70, keyword 0.30
+    # +StockTwits:             finbert 0.55, stocktwits 0.25, keyword 0.20
+    # +AV News:                av_news 0.35, finbert 0.40, stocktwits 0.10, keyword 0.15
+    # AV News only (no FinBERT): av_news 0.55, stocktwits 0.20, keyword 0.25
+
+    if finbert_raw is not None and av_score is not None and stocktwits_score is not None:
+        final_score = (av_score * 0.35 + finbert_raw * 0.40
+                       + stocktwits_score * 0.10 + raw_score * 0.15)
+        confidence = "high"
+    elif finbert_raw is not None and av_score is not None:
+        final_score = av_score * 0.40 + finbert_raw * 0.45 + raw_score * 0.15
+        confidence = "high"
+    elif finbert_raw is not None and stocktwits_score is not None:
+        final_score = finbert_raw * 0.55 + stocktwits_score * 0.25 + raw_score * 0.20
+        confidence = "medium"
+    elif av_score is not None and stocktwits_score is not None:
+        final_score = av_score * 0.55 + stocktwits_score * 0.20 + raw_score * 0.25
+        confidence = "medium"
     elif finbert_raw is not None:
         final_score = finbert_raw * 0.70 + raw_score * 0.30
-        sentiment = "bullish" if final_score > 15 else ("bearish" if final_score < -15 else "neutral")
         confidence = "medium"
-        key_themes = []
-        rationale = f"FinBERT financial sentiment analysis of {len(all_texts)} recent headlines."
-        risk_flags = []
+    elif av_score is not None:
+        final_score = av_score * 0.65 + raw_score * 0.35
+        confidence = "medium"
+    elif stocktwits_score is not None:
+        final_score = stocktwits_score * 0.60 + raw_score * 0.40
+        confidence = "low"
     else:
         final_score = raw_score
-        sentiment = "bullish" if raw_score > 20 else ("bearish" if raw_score < -20 else "neutral")
         confidence = "low"
-        key_themes = []
-        rationale = "Keyword-based sentiment scoring only."
-        risk_flags = []
 
-    # Step 5: Adjust for Google Trends (if rising interest, small boost)
+    # ── Step 6: Google Trends direction adjustment (±8 pts) ───────────────────
     trends_adjustment = 0.0
     if google_trends and google_trends.get("available"):
         direction = google_trends.get("trend_direction", 0)
-        trends_adjustment = direction * 8.0  # ±8 points for trending up/down
+        trends_adjustment = direction * 8.0
         final_score += trends_adjustment
 
-    # Normalize to 0-100
+    # ── Step 7: Derive labels from blended score ──────────────────────────────
+    sentiment = "bullish" if final_score > 15 else ("bearish" if final_score < -15 else "neutral")
+
+    # Build rationale from sources actually used
+    source_str = " + ".join(sources_used)
+    article_count = len(all_texts)
+    rationale_parts = [f"Blended sentiment from {source_str} ({article_count} texts)."]
+    if stocktwits and stocktwits.get("available"):
+        st_bull = stocktwits.get("bullish", 0)
+        st_bear = stocktwits.get("bearish", 0)
+        rationale_parts.append(f"StockTwits: {st_bull} bullish / {st_bear} bearish tagged messages.")
+    if av_news and av_news.get("available"):
+        rationale_parts.append(
+            f"AV News: {av_news.get('article_count', 0)} relevant articles, "
+            f"label: {av_news.get('label', 'N/A')}."
+        )
+
+    # ── Normalize to 0-100 ────────────────────────────────────────────────────
     normalized = float((final_score + 100) / 2)
     normalized = max(0.0, min(100.0, normalized))
 
     return {
         "sentiment": sentiment,
         "confidence": confidence,
-        "score": round(float(claude_result["score"]) if claude_result else (finbert_raw or raw_score), 2),
-        "key_themes": key_themes,
-        "rationale": rationale,
-        "risk_flags": risk_flags,
+        "score": round(final_score, 2),
+        "key_themes": [],
+        "rationale": " ".join(rationale_parts),
+        "risk_flags": [],
         "raw_keyword_score": round(raw_score, 2),
         "finbert_score": round(finbert_raw, 2) if finbert_raw is not None else None,
+        "stocktwits_score": round(stocktwits_score, 2) if stocktwits_score is not None else None,
+        "av_news_score": round(av_score, 2) if av_score is not None else None,
         "trends_adjustment": round(trends_adjustment, 2),
         "final_sentiment_score": round(normalized, 2),
-        "data_source": data_source,
+        "data_source": "+".join(sources_used),
     }

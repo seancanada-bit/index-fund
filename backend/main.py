@@ -15,8 +15,9 @@ from models import (ForecastResponse, FundForecast, TechnicalSignals,
                     LongHorizonMetrics, InvestmentScenarios)
 from data_fetcher import (
     fetch_price_history, fetch_price_history_extended, fetch_realtime_quote, fetch_macro_data,
-    fetch_news, fetch_reddit_sentiment, fetch_fear_greed,
-    fetch_google_trends, prefetch_price_history_batch, invalidate_cache, _cache_get, _cache_set
+    fetch_news, fetch_reddit_sentiment, fetch_fear_greed, fetch_google_trends,
+    fetch_stocktwits, fetch_av_news_sentiment,
+    prefetch_price_history_batch, invalidate_cache, _cache_get, _cache_set
 )
 from technical import compute_technicals, compute_long_horizon_metrics, compute_investment_scenarios
 from macro import score_macro_environment, FUND_NAMES, FUND_CURRENCY
@@ -132,7 +133,24 @@ def build_forecast_sync() -> dict:
                 logger.warning(f"Google Trends failed for {ticker}: {e}")
                 source_status["google_trends"] = "degraded"
 
-            sentiment = analyze_sentiment(ticker, news, reddit_posts, google_trends=google_trends)
+            stocktwits = {}
+            try:
+                stocktwits = fetch_stocktwits(ticker)
+            except Exception as e:
+                logger.warning(f"StockTwits failed for {ticker}: {e}")
+
+            av_news = {}
+            try:
+                av_news = fetch_av_news_sentiment(ticker)
+            except Exception as e:
+                logger.warning(f"AV News Sentiment failed for {ticker}: {e}")
+
+            sentiment = analyze_sentiment(
+                ticker, news, reddit_posts,
+                google_trends=google_trends,
+                stocktwits=stocktwits,
+                av_news=av_news,
+            )
             if "keyword_fallback" in sentiment.get("data_source", ""):
                 source_status["claude_api"] = "degraded"
 
