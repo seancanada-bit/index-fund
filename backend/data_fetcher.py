@@ -112,7 +112,7 @@ def prefetch_price_history_batch(tickers: list, days: int = 60):
                 df = df.tail(days)
                 serializable = df.copy()
                 serializable.index = serializable.index.strftime("%Y-%m-%d")
-                _cache_set(f"price_history:{ticker}:{days}", json.dumps(serializable.to_dict()), 1800)
+                _cache_set(f"price_history:{ticker}:{days}", json.dumps(serializable.to_dict()), 14400)  # 4h
             except Exception as e:
                 logger.warning(f"Batch cache store failed for {ticker}: {e}")
 
@@ -140,7 +140,7 @@ def fetch_price_history(ticker: str, days: int = 60) -> pd.DataFrame:
             df = df.tail(days)
             serializable = df.copy()
             serializable.index = serializable.index.strftime("%Y-%m-%d")
-            _cache_set(cache_key, json.dumps(serializable.to_dict()), 1800)
+            _cache_set(cache_key, json.dumps(serializable.to_dict()), 14400)  # 4h
             return df
     except Exception as e:
         logger.warning(f"yfinance failed for {ticker}: {e}")
@@ -173,7 +173,7 @@ def fetch_price_history(ticker: str, days: int = 60) -> pd.DataFrame:
         df.index = pd.to_datetime(df.index)
         serializable = df.copy()
         serializable.index = serializable.index.strftime("%Y-%m-%d")
-        _cache_set(cache_key, json.dumps(serializable.to_dict()), 1800)
+        _cache_set(cache_key, json.dumps(serializable.to_dict()), 14400)  # 4h
         return df
     except Exception as e:
         logger.error(f"Alpha Vantage fallback failed for {ticker}: {e}")
@@ -209,7 +209,7 @@ def fetch_realtime_quote(ticker: str) -> dict:
             "expense_ratio": slow_info.get("expenseRatio"),
         }
         if result["current_price"]:
-            _cache_set(cache_key, json.dumps(result), 300)
+            _cache_set(cache_key, json.dumps(result), 3600)  # 1h
             return result
     except Exception as e:
         logger.warning(f"yfinance quote failed for {ticker}: {e}")
@@ -230,7 +230,7 @@ def fetch_realtime_quote(ticker: str) -> dict:
             "week_52_high": None, "week_52_low": None,
             "dividend_yield": None, "beta": None, "pe_ratio": None,
         }
-        _cache_set(cache_key, json.dumps(result), 300)
+        _cache_set(cache_key, json.dumps(result), 3600)  # 1h
     except Exception as e:
         logger.error(f"Alpha Vantage quote fallback failed for {ticker}: {e}")
 
@@ -303,7 +303,7 @@ def fetch_fear_greed() -> dict:
     except Exception as e:
         logger.warning(f"Fear & Greed fetch failed: {e}")
 
-    _cache_set(cache_key, json.dumps(result), 3600)
+    _cache_set(cache_key, json.dumps(result), 21600)  # 6h — index only shifts slowly
     return result
 
 
@@ -331,7 +331,7 @@ def fetch_yf_news(ticker: str) -> list:
     except Exception as e:
         logger.warning(f"yfinance news failed for {ticker}: {e}")
 
-    _cache_set(cache_key, json.dumps(articles), 3600)
+    _cache_set(cache_key, json.dumps(articles), 43200)  # 12h — news headlines don't change fast
     return articles
 
 
@@ -378,7 +378,7 @@ def fetch_news(ticker: str, fund_name: str, days: int = 3) -> list:
             seen.add(title)
             unique.append(a)
 
-    _cache_set(cache_key, json.dumps(unique[:25]), 3600)
+    _cache_set(cache_key, json.dumps(unique[:25]), 43200)  # 12h — keeps NewsAPI under 100 req/day
     return unique[:25]
 
 
@@ -483,7 +483,7 @@ def fetch_reddit_sentiment(ticker: str) -> list:
     except Exception as e:
         logger.warning(f"Reddit PRAW failed for {ticker}: {e}")
 
-    _cache_set(cache_key, json.dumps(posts), 7200)
+    _cache_set(cache_key, json.dumps(posts), 43200)  # 12h — Reddit discussions don't shift hourly
     return posts
 
 
@@ -535,7 +535,7 @@ def fetch_stocktwits(ticker: str) -> dict:
     except Exception as e:
         logger.warning(f"StockTwits fetch failed for {ticker}: {e}")
 
-    _cache_set(cache_key, json.dumps(result), 3600)
+    _cache_set(cache_key, json.dumps(result), 21600)  # 6h — crowd sentiment shifts slowly
     return result
 
 

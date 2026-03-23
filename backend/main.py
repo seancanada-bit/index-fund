@@ -256,7 +256,7 @@ def build_forecast_sync() -> dict:
             "fear_greed": fear_greed,
         }
 
-        _cache_set(_forecast_cache_key, json.dumps(result, default=str), 1800)
+        _cache_set(_forecast_cache_key, json.dumps(result, default=str), 14400)  # 4h — matches scheduler
         logger.info(f"Forecast complete: {len(ranked)} funds ranked.")
         return result
 
@@ -335,7 +335,7 @@ def _self_improvement_job():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # BackgroundScheduler runs in a dedicated thread — never blocks the event loop
-    scheduler.add_job(build_forecast_sync, "interval", minutes=60, id="forecast_refresh",
+    scheduler.add_job(build_forecast_sync, "interval", hours=4, id="forecast_refresh",
                       next_run_time=datetime.now(timezone.utc))
     scheduler.add_job(_self_improvement_job, "interval", hours=24, id="self_improve")
     scheduler.start()
