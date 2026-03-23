@@ -1,0 +1,48 @@
+name: Refresh Data Snapshot
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'   # every 4 hours
+  workflow_dispatch:          # allow manual trigger
+
+jobs:
+  refresh:
+    name: Fetch forecast & push snapshot to cPanel
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch latest forecast from Render
+        run: |
+          echo "Fetching forecast (allow up to 120s for cold start)..."
+          curl -sf --max-time 120 \
+            "${{ secrets.REACT_APP_API_URL }}/api/forecast" \
+            -o snapshot.json
+          # Validate: must be JSON with at least one fund
+          FUND_COUNT=$(python3 -c "import json,sys; d=json.load(open('snapshot.json')); print(len(d.get('funds',[])))")
+          echo "✓ Snapshot valid — $FUND_COUNT funds"
+          if [ "$FUND_COUNT" -eq "0" ]; then
+            echo "No funds in response — aborting to avoid overwriting good data"
+            exit 1
+          fi
+
+      - name: Upload snapshot.json to cPanel via FTP
+        run: |
+          curl -sS -T snapshot.json \
+            "ftp://${{ secrets.FTP_HOST }}/snapshot.json" \
+            --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" \
+            --ftp-create-dirs
+          echo "✓ snapshot.json uploaded to cPanel"
+
+      - name: Commit snapshot to repo (for inclusion in future builds)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save & push snapshot
+        run: |
+          cp snapshot.json frontend/public/snapshot.json
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add frontend/public/snapshot.json
+          git diff --staged --quiet && echo "No changes to snapshot" || \
+            git commit -m "chore: update forecast snapshot [skip ci]" && git push

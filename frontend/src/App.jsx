@@ -13,9 +13,10 @@ import MarketMoodBar from './components/MarketMoodBar';
 import JumpNav from './components/JumpNav';
 import HorizonSelector from './components/HorizonSelector';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-const CACHE_KEY = 'iff_forecast_cache';
-const CACHE_TS_KEY  = 'iff_forecast_ts';
+const API_BASE     = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const SNAPSHOT_URL = (process.env.PUBLIC_URL || '') + '/snapshot.json';
+const CACHE_KEY    = 'iff_forecast_cache';
+const CACHE_TS_KEY = 'iff_forecast_ts';
 
 function timeAgo(isoString) {
   if (!isoString) return '';
@@ -118,18 +119,41 @@ export default function App() {
   const fetchForecast = useCallback(async (isRefresh = false) => {
     setError(null);
 
-    // ── Step 1: seed UI from localStorage immediately (no skeletons for returning visitors)
+    // ── Step 1: seed UI immediately so no visitor ever sees skeletons
     if (!isRefresh) {
+      let seeded = false;
+
+      // 1a. localStorage — freshest option (returning visitors)
       try {
         const raw = localStorage.getItem(CACHE_KEY);
         const ts  = localStorage.getItem(CACHE_TS_KEY);
         if (raw) {
-          applyData(JSON.parse(raw));
-          setLoading(false);        // skip skeleton — show stale content straight away
-          setCachedAt(ts || new Date(0).toISOString());
-          hasCachedDataRef.current = true;
+          const parsed = JSON.parse(raw);
+          if (parsed?.funds?.length > 0) {
+            applyData(parsed);
+            setLoading(false);
+            setCachedAt(ts || new Date(0).toISOString());
+            hasCachedDataRef.current = true;
+            seeded = true;
+          }
         }
-      } catch (_) { /* corrupt cache — ignore, fall through to skeleton */ }
+      } catch (_) {}
+
+      // 1b. Static snapshot.json on cPanel — first-time visitors, no cold start
+      if (!seeded) {
+        try {
+          const snap = await fetch(SNAPSHOT_URL);
+          if (snap.ok) {
+            const snapData = await snap.json();
+            if (snapData?.funds?.length > 0) {
+              applyData(snapData);
+              setLoading(false);
+              setCachedAt(snapData.last_updated || new Date(0).toISOString());
+              hasCachedDataRef.current = true;
+            }
+          }
+        } catch (_) {}
+      }
     }
 
     if (isRefresh) setRefreshing(true);
