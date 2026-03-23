@@ -1,10 +1,15 @@
 import os
 import logging
+import threading
+import warnings
 from datetime import datetime, timezone
 from typing import Optional
 from contextlib import asynccontextmanager
 import asyncio
 import json
+
+# Suppress asyncio DeprecationWarning on Python 3.14 (harmless, fixed in future FastAPI/APScheduler)
+warnings.filterwarnings("ignore", message=".*iscoroutinefunction.*", category=DeprecationWarning)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,195 +56,212 @@ _last_updated: Optional[datetime] = None
 _data_source_status: dict = {}
 _prev_ranks: dict = {}        # {ticker: rank} from last completed forecast cycle
 _last_log_date: Optional[str] = None  # "YYYY-MM-DD" — log predictions once per day only
+_build_lock = threading.Lock()        # Prevents concurrent forecast builds
 
 
 def build_forecast_sync() -> dict:
-    """Synchronous forecast build — runs in a background thread via APScheduler."""
+    """Synchronous forecast build — runs in a background thread via APScheduler.
+    Uses a lock to prevent concurrent builds from wasting resources."""
     global _last_updated, _data_source_status, _prev_ranks, _last_log_date
-    logger.info("Building forecast for all tickers...")
 
-    source_status = {
-        "yfinance": "ok", "alpha_vantage": "ok", "fred": "ok",
-        "news_api": "ok", "reddit": "ok", "claude_api": "ok",
-        "finbert": "ok", "fear_greed": "ok", "google_trends": "ok",
-    }
+    if not _build_lock.acquire(blocking=False):
+        logger.info("Forecast build already in progress — returning cached result.")
+        cached = _cache_get(_forecast_cache_key)
+        if cached:
+            return json.loads(cached)
+        # Wait for the running build to finish then return its result
+        with _build_lock:
+            cached = _cache_get(_forecast_cache_key)
+            return json.loads(cached) if cached else {}
 
-    # Batch prefetch all price histories in one yfinance call (much faster than one-by-one)
     try:
-        prefetch_price_history_batch(TICKERS, days=60)
-    except Exception as e:
-        logger.warning(f"Batch prefetch failed, will fall back to individual fetches: {e}")
+        logger.info("Building forecast for all tickers...")
 
-    # Fetch shared data once
-    macro_data = {}
-    try:
-        macro_data = fetch_macro_data()
-        if not macro_data:
-            source_status["fred"] = "error"
-    except Exception as e:
-        logger.error(f"Macro data fetch failed: {e}")
-        source_status["fred"] = "error"
+        source_status = {
+            "yfinance": "ok", "alpha_vantage": "ok", "fred": "ok",
+            "news_api": "ok", "reddit": "ok", "claude_api": "ok",
+            "finbert": "ok", "fear_greed": "ok", "google_trends": "ok",
+        }
 
-    fear_greed = {"score": 50.0, "rating": "neutral", "available": False}
-    try:
-        fear_greed = fetch_fear_greed()
-        if not fear_greed.get("available"):
-            source_status["fear_greed"] = "degraded"
-    except Exception as e:
-        logger.warning(f"Fear & Greed fetch failed: {e}")
-        source_status["fear_greed"] = "error"
-
-    all_fund_data = []
-
-    for ticker in TICKERS:
-        fund_name = FUND_NAMES.get(ticker, ticker)
-        logger.info(f"Processing {ticker}...")
+        # Batch prefetch all price histories in one yfinance call (much faster than one-by-one)
         try:
-            df = fetch_price_history(ticker, days=60)
-            if df is None or len(df) == 0:
-                source_status["yfinance"] = "degraded"
-                logger.warning(f"No price data for {ticker}")
-                continue
+            prefetch_price_history_batch(TICKERS, days=60)
+        except Exception as e:
+            logger.warning(f"Batch prefetch failed, will fall back to individual fetches: {e}")
 
-            quote = fetch_realtime_quote(ticker)
-            technicals = compute_technicals(df, quote=quote)
+        # Fetch shared data once
+        macro_data = {}
+        try:
+            macro_data = fetch_macro_data()
+            if not macro_data:
+                source_status["fred"] = "error"
+        except Exception as e:
+            logger.error(f"Macro data fetch failed: {e}")
+            source_status["fred"] = "error"
 
-            # Long-horizon metrics (5Y price history, cached 24h)
-            long_df = fetch_price_history_extended(ticker, years=5)
-            long_metrics = compute_long_horizon_metrics(
-                long_df, expense_ratio=quote.get("expense_ratio")
-            )
-            investment_scenarios = compute_investment_scenarios(
-                long_df, current_price=quote.get("current_price"),
-                expense_ratio=quote.get("expense_ratio")
-            )
-            macro = score_macro_environment(ticker, macro_data, fear_greed=fear_greed)
+        fear_greed = {"score": 50.0, "rating": "neutral", "available": False}
+        try:
+            fear_greed = fetch_fear_greed()
+            if not fear_greed.get("available"):
+                source_status["fear_greed"] = "degraded"
+        except Exception as e:
+            logger.warning(f"Fear & Greed fetch failed: {e}")
+            source_status["fear_greed"] = "error"
 
-            news = []
+        all_fund_data = []
+
+        for ticker in TICKERS:
+            fund_name = FUND_NAMES.get(ticker, ticker)
+            logger.info(f"Processing {ticker}...")
             try:
-                news = fetch_news(ticker, fund_name)
-            except Exception as e:
-                logger.warning(f"News fetch failed for {ticker}: {e}")
-                source_status["news_api"] = "degraded"
+                df = fetch_price_history(ticker, days=60)
+                if df is None or len(df) == 0:
+                    source_status["yfinance"] = "degraded"
+                    logger.warning(f"No price data for {ticker}")
+                    continue
 
-            reddit_posts = []
+                quote = fetch_realtime_quote(ticker)
+                technicals = compute_technicals(df, quote=quote)
 
-            google_trends = {"score": 50, "trend_direction": 0, "available": False}
-            try:
-                google_trends = fetch_google_trends(ticker)
-                if not google_trends.get("available"):
+                # Long-horizon metrics (5Y price history, cached 24h)
+                long_df = fetch_price_history_extended(ticker, years=5)
+                long_metrics = compute_long_horizon_metrics(
+                    long_df, expense_ratio=quote.get("expense_ratio")
+                )
+                investment_scenarios = compute_investment_scenarios(
+                    long_df, current_price=quote.get("current_price"),
+                    expense_ratio=quote.get("expense_ratio")
+                )
+                macro = score_macro_environment(ticker, macro_data, fear_greed=fear_greed)
+
+                news = []
+                try:
+                    news = fetch_news(ticker, fund_name)
+                except Exception as e:
+                    logger.warning(f"News fetch failed for {ticker}: {e}")
+                    source_status["news_api"] = "degraded"
+
+                reddit_posts = []
+
+                google_trends = {"score": 50, "trend_direction": 0, "available": False}
+                try:
+                    google_trends = fetch_google_trends(ticker)
+                    if not google_trends.get("available"):
+                        source_status["google_trends"] = "degraded"
+                except Exception as e:
+                    logger.debug(f"Google Trends failed for {ticker} (expected on cloud IPs): {e}")
                     source_status["google_trends"] = "degraded"
-            except Exception as e:
-                logger.warning(f"Google Trends failed for {ticker}: {e}")
-                source_status["google_trends"] = "degraded"
 
-            stocktwits = {}
-            try:
-                stocktwits = fetch_stocktwits(ticker)
-            except Exception as e:
-                logger.warning(f"StockTwits failed for {ticker}: {e}")
+                stocktwits = {}
+                try:
+                    stocktwits = fetch_stocktwits(ticker)
+                except Exception as e:
+                    logger.warning(f"StockTwits failed for {ticker}: {e}")
 
-            av_news = {}
-            try:
-                av_news = fetch_av_news_sentiment(ticker)
-            except Exception as e:
-                logger.warning(f"AV News Sentiment failed for {ticker}: {e}")
+                av_news = {}
+                try:
+                    av_news = fetch_av_news_sentiment(ticker)
+                except Exception as e:
+                    logger.warning(f"AV News Sentiment failed for {ticker}: {e}")
 
-            sentiment = analyze_sentiment(
-                ticker, news, reddit_posts,
-                google_trends=google_trends,
-                stocktwits=stocktwits,
-                av_news=av_news,
-            )
-            if "keyword_fallback" in sentiment.get("data_source", ""):
-                source_status["claude_api"] = "degraded"
+                sentiment = analyze_sentiment(
+                    ticker, news, reddit_posts,
+                    google_trends=google_trends,
+                    stocktwits=stocktwits,
+                    av_news=av_news,
+                )
+                if "keyword_fallback" in sentiment.get("data_source", ""):
+                    source_status["claude_api"] = "degraded"
 
-            backtest = compute_backtest(df)
+                backtest = compute_backtest(df)
 
-            # Price history sparkline (last 20 days)
-            price_history = []
-            close_col = df["Close"] if "Close" in df.columns else df.iloc[:, 3]
-            close_series = close_col.squeeze()
-            for date, price_val in close_series.tail(20).items():
-                price_history.append({
-                    "date": str(date)[:10],
-                    "close": round(float(price_val), 2),
+                # Price history sparkline (last 20 days)
+                price_history = []
+                close_col = df["Close"] if "Close" in df.columns else df.iloc[:, 3]
+                close_series = close_col.squeeze()
+                for date, price_val in close_series.tail(20).items():
+                    price_history.append({
+                        "date": str(date)[:10],
+                        "close": round(float(price_val), 2),
+                    })
+
+                all_fund_data.append({
+                    "ticker": ticker,
+                    "fund_name": fund_name,
+                    "technical": technicals,
+                    "macro": macro,
+                    "sentiment": sentiment,
+                    "backtest": backtest,
+                    "current_price": quote.get("current_price"),
+                    "market_cap": quote.get("market_cap"),
+                    "volume": quote.get("volume"),
+                    "dividend_yield": quote.get("dividend_yield"),
+                    "beta": quote.get("beta"),
+                    "pe_ratio": quote.get("pe_ratio"),
+                    "expense_ratio": quote.get("expense_ratio"),
+                    "return_1d": round(technicals.get("momentum_1d", 0), 3),
+                    "return_5d": round(technicals.get("momentum_5d", 0), 3),
+                    "return_1m": round(technicals.get("momentum_1m", 0), 3),
+                    "long_metrics": long_metrics,
+                    "investment_scenarios": investment_scenarios,
+                    "google_trends_score": google_trends.get("score") if google_trends.get("available") else None,
+                    "google_trends_direction": google_trends.get("trend_direction"),
+                    "price_history": price_history,
+                    "currency": FUND_CURRENCY.get(ticker, "USD"),
+                    "ai_rationale": None,
+                    "key_signals": [],
+                    "rank": 0,
+                    "composite_score": 0,
+                    "confidence_level": "low",
+                    "last_updated": datetime.now(timezone.utc).isoformat(),
                 })
 
-            all_fund_data.append({
-                "ticker": ticker,
-                "fund_name": fund_name,
-                "technical": technicals,
-                "macro": macro,
-                "sentiment": sentiment,
-                "backtest": backtest,
-                "current_price": quote.get("current_price"),
-                "market_cap": quote.get("market_cap"),
-                "volume": quote.get("volume"),
-                "dividend_yield": quote.get("dividend_yield"),
-                "beta": quote.get("beta"),
-                "pe_ratio": quote.get("pe_ratio"),
-                "expense_ratio": quote.get("expense_ratio"),
-                "return_1d": round(technicals.get("momentum_1d", 0), 3),
-                "return_5d": round(technicals.get("momentum_5d", 0), 3),
-                "return_1m": round(technicals.get("momentum_1m", 0), 3),
-                "long_metrics": long_metrics,
-                "investment_scenarios": investment_scenarios,
-                "google_trends_score": google_trends.get("score") if google_trends.get("available") else None,
-                "google_trends_direction": google_trends.get("trend_direction"),
-                "price_history": price_history,
-                "currency": FUND_CURRENCY.get(ticker, "USD"),
-                "ai_rationale": None,
-                "key_signals": [],
-                "rank": 0,
-                "composite_score": 0,
-                "confidence_level": "low",
-                "last_updated": datetime.now(timezone.utc).isoformat(),
-            })
+            except Exception as e:
+                logger.error(f"Failed to process {ticker}: {e}", exc_info=True)
 
+        ranked = rank_funds(all_fund_data)
+        _last_updated = datetime.now(timezone.utc)
+        _data_source_status = source_status
+
+        # Snapshot this forecast once per day for self-improvement tracking
+        try:
+            from prediction_store import log_predictions
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if _last_log_date != today_str:
+                log_predictions(ranked)
+                _last_log_date = today_str
+                logger.info(f"Daily predictions logged ({today_str}).")
+            else:
+                logger.info("Predictions already logged today — skipping.")
         except Exception as e:
-            logger.error(f"Failed to process {ticker}: {e}", exc_info=True)
+            logger.warning(f"log_predictions failed: {e}")
 
-    ranked = rank_funds(all_fund_data)
-    _last_updated = datetime.now(timezone.utc)
-    _data_source_status = source_status
+        # Triple Lock alert check — compare ranks against previous cycle
+        try:
+            from alerter import check_and_alert
+            fired = check_and_alert(ranked, _prev_ranks)
+            if fired:
+                logger.info(f"Alerts fired for: {fired}")
+        except Exception as e:
+            logger.warning(f"check_and_alert failed: {e}")
 
-    # Snapshot this forecast once per day for self-improvement tracking
-    try:
-        from prediction_store import log_predictions
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if _last_log_date != today_str:
-            log_predictions(ranked)
-            _last_log_date = today_str
-            logger.info(f"Daily predictions logged ({today_str}).")
-        else:
-            logger.info("Predictions already logged today — skipping.")
-    except Exception as e:
-        logger.warning(f"log_predictions failed: {e}")
+        # Update prev_ranks for next cycle
+        _prev_ranks = {f["ticker"]: f["rank"] for f in ranked}
 
-    # Triple Lock alert check — compare ranks against previous cycle
-    try:
-        from alerter import check_and_alert
-        fired = check_and_alert(ranked, _prev_ranks)
-        if fired:
-            logger.info(f"Alerts fired for: {fired}")
-    except Exception as e:
-        logger.warning(f"check_and_alert failed: {e}")
+        result = {
+            "funds": ranked,
+            "last_updated": _last_updated.isoformat(),
+            "data_source_status": source_status,
+            "total_funds": len(ranked),
+            "fear_greed": fear_greed,
+        }
 
-    # Update prev_ranks for next cycle
-    _prev_ranks = {f["ticker"]: f["rank"] for f in ranked}
+        _cache_set(_forecast_cache_key, json.dumps(result, default=str), 1800)
+        logger.info(f"Forecast complete: {len(ranked)} funds ranked.")
+        return result
 
-    result = {
-        "funds": ranked,
-        "last_updated": _last_updated.isoformat(),
-        "data_source_status": source_status,
-        "total_funds": len(ranked),
-        "fear_greed": fear_greed,
-    }
-
-    _cache_set(_forecast_cache_key, json.dumps(result, default=str), 1800)
-    logger.info(f"Forecast complete: {len(ranked)} funds ranked.")
-    return result
+    finally:
+        _build_lock.release()
 
 
 def _parse_forecast(raw: dict) -> ForecastResponse:

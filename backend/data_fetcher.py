@@ -408,7 +408,7 @@ def fetch_google_trends(ticker: str) -> dict:
                 direction = 0
             result = {"score": round(avg, 1), "trend_direction": direction, "available": True}
     except Exception as e:
-        logger.warning(f"Google Trends failed for {ticker}: {e}")
+        logger.debug(f"Google Trends failed for {ticker} (expected on cloud IPs): {e}")
 
     _cache_set(cache_key, json.dumps(result), 86400)  # Cache 24h — trends change slowly
     return result
