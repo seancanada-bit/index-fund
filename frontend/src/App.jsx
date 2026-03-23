@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PropTypes from 'prop-types';
 import HeroSection from './components/HeroSection';
@@ -14,6 +14,17 @@ import JumpNav from './components/JumpNav';
 import HorizonSelector from './components/HorizonSelector';
 
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const CACHE_KEY = 'iff_forecast_cache';
+const CACHE_TS_KEY  = 'iff_forecast_ts';
+
+function timeAgo(isoString) {
+  if (!isoString) return '';
+  const diff = Math.floor((Date.now() - new Date(isoString)) / 1000);
+  if (diff < 60)   return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
 
 function ErrorBanner({ message }) {
   return (
@@ -25,6 +36,18 @@ function ErrorBanner({ message }) {
   );
 }
 ErrorBanner.propTypes = { message: PropTypes.string.isRequired };
+
+function StaleBanner({ cachedAt }) {
+  return (
+    <div className="mx-auto max-w-7xl px-4 mb-4">
+      <div className="bg-amber-900/20 border border-amber-700/30 rounded-lg px-4 py-2 text-amber-400/70 text-xs flex items-center gap-2">
+        <span className="inline-block w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+        Showing snapshot from {timeAgo(cachedAt)} — live data is loading in the background
+      </div>
+    </div>
+  );
+}
+StaleBanner.propTypes = { cachedAt: PropTypes.string.isRequired };
 
 function LoadingSkeleton() {
   return (
@@ -80,26 +103,70 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [sourceStatus, setSourceStatus] = useState({});
   const [horizon, setHorizon] = useState('7d');
+  // cachedAt: ISO string of when we last successfully saved to localStorage
+  // non-null while we're showing stale data waiting for live refresh
+  const [cachedAt, setCachedAt] = useState(null);
+  // ref so fetchForecast can check without being in the dep array (avoids infinite loop)
+  const hasCachedDataRef = useRef(false);
+
+  const applyData = useCallback((data) => {
+    setForecast(data);
+    setLastUpdated(data.last_updated);
+    setSourceStatus(data.data_source_status || {});
+  }, []);
 
   const fetchForecast = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
     setError(null);
 
+    // ── Step 1: seed UI from localStorage immediately (no skeletons for returning visitors)
+    if (!isRefresh) {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        const ts  = localStorage.getItem(CACHE_TS_KEY);
+        if (raw) {
+          applyData(JSON.parse(raw));
+          setLoading(false);        // skip skeleton — show stale content straight away
+          setCachedAt(ts || new Date(0).toISOString());
+          hasCachedDataRef.current = true;
+        }
+      } catch (_) { /* corrupt cache — ignore, fall through to skeleton */ }
+    }
+
+    if (isRefresh) setRefreshing(true);
+
+    // ── Step 2: fetch live data with a 90-second timeout
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90_000);
+
     try {
-      const res = await fetch(`${API_BASE}/api/forecast`);
+      const res = await fetch(`${API_BASE}/api/forecast`, { signal: controller.signal });
+      clearTimeout(timer);
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
       const data = await res.json();
-      setForecast(data);
-      setLastUpdated(data.last_updated);
-      setSourceStatus(data.data_source_status || {});
+
+      applyData(data);
+      setCachedAt(null);  // live data arrived — hide stale banner
+
+      // Persist for next visit
+      localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+      localStorage.setItem(CACHE_TS_KEY, new Date().toISOString());
     } catch (err) {
-      setError(err.message || 'Failed to load forecast data. Is the backend running?');
+      clearTimeout(timer);
+      if (err.name === 'AbortError') {
+        // Render still spinning up — if stale data is showing, just add a soft note
+        if (!hasCachedDataRef.current) {
+          setError('Live data is taking longer than usual (Render cold start). Retrying…');
+        }
+        // Retry once more after 60 s — Render is usually warm by then
+        setTimeout(() => fetchForecast(true), 60_000);
+      } else {
+        if (!hasCachedDataRef.current) setError(err.message || 'Failed to load forecast data. Is the backend running?');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [applyData]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -139,6 +206,7 @@ export default function App() {
           lastUpdated={lastUpdated}
         />
 
+        {cachedAt && !refreshing && <StaleBanner cachedAt={cachedAt} />}
         {error && <ErrorBanner message={error} />}
 
         <AnimatePresence mode="wait">
