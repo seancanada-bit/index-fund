@@ -97,8 +97,16 @@ EQUITY_CATS = {"equity_broad", "growth_tech", "small_cap", "international", "rea
 SAFE_HAVEN_CATS = {"commodities", "fixed_income"}
 
 
-def score_macro_environment(ticker: str, macro_data: dict, fear_greed: dict = None) -> dict:
+def score_macro_environment(
+    ticker: str,
+    macro_data: dict,
+    fear_greed: dict = None,
+    cboe_pcr: dict = None,
+    treasury_curve: dict = None,
+    quote: dict = None,
+) -> dict:
     category = FUND_CATEGORIES.get(ticker, "equity_broad")
+    is_canadian = ticker.endswith(".TO")
     signals = []
     score = 50.0
 
@@ -108,6 +116,10 @@ def score_macro_environment(ticker: str, macro_data: dict, fear_greed: dict = No
     unrate_data = macro_data.get("unemployment")
     yield_data = macro_data.get("yield_curve")
     gdp_data = macro_data.get("gdp")
+    # Canadian FRED series
+    ca_cpi_data = macro_data.get("ca_cpi")
+    ca_ur_data = macro_data.get("ca_unemployment")
+    ca_rate_data = macro_data.get("ca_rate")
 
     # --- VIX ---
     if vix_data:
@@ -224,6 +236,95 @@ def score_macro_environment(ticker: str, macro_data: dict, fear_greed: dict = No
                 score += 10
                 signals.append({"signal": f"GDP growth ({gdp_prev:.0f}→{gdp_now:.0f}B)", "direction": "bullish", "impact": +10})
 
+    # --- CBOE Equity Put/Call Ratio ---
+    if cboe_pcr and cboe_pcr.get("available"):
+        pcr = cboe_pcr["equity_pcr"]
+        sig = cboe_pcr["signal"]
+        if sig == "bearish" and category in EQUITY_CATS:
+            score -= 12
+            signals.append({"signal": f"CBOE equity P/C={pcr:.3f} (high hedging)", "direction": "bearish", "impact": -12})
+        elif sig == "bearish" and category in SAFE_HAVEN_CATS:
+            score += 10
+            signals.append({"signal": f"CBOE equity P/C={pcr:.3f} (flight to safety)", "direction": "bullish", "impact": +10})
+        elif sig == "complacent" and category in EQUITY_CATS:
+            score -= 8  # overbought warning — contrarian
+            signals.append({"signal": f"CBOE equity P/C={pcr:.3f} (complacency, overbought)", "direction": "bearish", "impact": -8})
+
+    # --- Treasury full yield curve (3m-10Y — Fed's preferred recession indicator) ---
+    if treasury_curve and treasury_curve.get("available"):
+        spread_3m10y = treasury_curve.get("spread_10y_3m")
+        if spread_3m10y is not None:
+            if spread_3m10y < -0.5:  # Deep inversion
+                if category in EQUITY_CATS:
+                    score -= 15
+                    signals.append({"signal": f"Yield curve deeply inverted (3m-10Y={spread_3m10y:+.2f}%)", "direction": "bearish", "impact": -15})
+                elif category == "fixed_income":
+                    score += 12
+                    signals.append({"signal": f"Yield curve deeply inverted (3m-10Y={spread_3m10y:+.2f}%)", "direction": "bullish", "impact": +12})
+            elif spread_3m10y < 0:  # Mildly inverted
+                if category in EQUITY_CATS:
+                    score -= 8
+                    signals.append({"signal": f"Yield curve inverted (3m-10Y={spread_3m10y:+.2f}%)", "direction": "bearish", "impact": -8})
+            elif spread_3m10y > 1.0:  # Healthy steepening
+                if category in EQUITY_CATS:
+                    score += 8
+                    signals.append({"signal": f"Yield curve healthy (3m-10Y={spread_3m10y:+.2f}%)", "direction": "bullish", "impact": +8})
+                elif category == "financials":
+                    score += 12
+                    signals.append({"signal": f"Steep yield curve (3m-10Y={spread_3m10y:+.2f}%)", "direction": "bullish", "impact": +12})
+
+    # --- AUM Fund Flows (7-day) ---
+    if quote and quote.get("aum_flow_7d_pct") is not None:
+        flow = quote["aum_flow_7d_pct"]
+        if flow > 3.0:  # Significant inflows
+            score += 10
+            signals.append({"signal": f"AUM inflows +{flow:.1f}% (7d)", "direction": "bullish", "impact": +10})
+        elif flow > 1.0:
+            score += 5
+            signals.append({"signal": f"AUM inflows +{flow:.1f}% (7d)", "direction": "bullish", "impact": +5})
+        elif flow < -3.0:  # Significant outflows
+            score -= 10
+            signals.append({"signal": f"AUM outflows {flow:.1f}% (7d)", "direction": "bearish", "impact": -10})
+        elif flow < -1.0:
+            score -= 5
+            signals.append({"signal": f"AUM outflows {flow:.1f}% (7d)", "direction": "bearish", "impact": -5})
+
+    # --- Canadian macro signals (for .TO tickers) ---
+    if is_canadian:
+        if ca_cpi_data and ca_cpi_data.get("previous") is not None:
+            ca_cpi = ca_cpi_data["latest"]
+            ca_cpi_prev = ca_cpi_data["previous"]
+            if ca_cpi > ca_cpi_prev:
+                if category == "commodities":
+                    score += 10
+                    signals.append({"signal": f"Canada CPI rising ({ca_cpi_prev:.1f}→{ca_cpi:.1f})", "direction": "bullish", "impact": +10})
+                elif category == "fixed_income":
+                    score -= 8
+                    signals.append({"signal": f"Canada CPI rising (inflation)", "direction": "bearish", "impact": -8})
+
+        if ca_rate_data and ca_rate_data.get("3m_ago") is not None:
+            ca_rate = ca_rate_data["latest"]
+            ca_rate_3m = ca_rate_data["3m_ago"]
+            if ca_rate < ca_rate_3m - 0.1:
+                if category in EQUITY_CATS:
+                    score += 10
+                    signals.append({"signal": f"BoC rate falling ({ca_rate_3m:.2f}→{ca_rate:.2f}%)", "direction": "bullish", "impact": +10})
+                elif category == "fixed_income":
+                    score += 12
+                    signals.append({"signal": f"BoC rate falling ({ca_rate_3m:.2f}→{ca_rate:.2f}%)", "direction": "bullish", "impact": +12})
+            elif ca_rate > ca_rate_3m + 0.1:
+                if category == "fixed_income":
+                    score -= 12
+                    signals.append({"signal": f"BoC rate rising ({ca_rate_3m:.2f}→{ca_rate:.2f}%)", "direction": "bearish", "impact": -12})
+
+        if ca_ur_data and ca_ur_data.get("previous") is not None:
+            ca_ur = ca_ur_data["latest"]
+            ca_ur_prev = ca_ur_data["previous"]
+            if ca_ur > ca_ur_prev + 0.2:
+                if category == "small_cap":
+                    score -= 8
+                    signals.append({"signal": f"Canada unemployment rising ({ca_ur_prev:.1f}→{ca_ur:.1f}%)", "direction": "bearish", "impact": -8})
+
     macro_score = float(np.clip(score, 0, 100))
 
     return {
@@ -235,6 +336,9 @@ def score_macro_environment(ticker: str, macro_data: dict, fear_greed: dict = No
         "gdp": gdp_data["latest"] if gdp_data else None,
         "fear_greed_score": fear_greed["score"] if fear_greed and fear_greed.get("available") else None,
         "fear_greed_rating": fear_greed["rating"] if fear_greed and fear_greed.get("available") else None,
+        "cboe_equity_pcr": cboe_pcr.get("equity_pcr") if cboe_pcr and cboe_pcr.get("available") else None,
+        "treasury_spread_3m10y": treasury_curve.get("spread_10y_3m") if treasury_curve and treasury_curve.get("available") else None,
+        "aum_flow_7d_pct": quote.get("aum_flow_7d_pct") if quote else None,
         "macro_score": round(macro_score, 2),
         "triggered_signals": signals,
     }

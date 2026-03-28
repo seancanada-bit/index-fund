@@ -196,17 +196,31 @@ def fetch_realtime_quote(ticker: str) -> dict:
         except Exception:
             pass
 
+        # AUM flow: compare current totalAssets vs 7-day cached baseline
+        total_assets = slow_info.get("totalAssets")
+        aum_flow_pct = None
+        if total_assets and total_assets > 0:
+            baseline_key = f"aum_baseline:{ticker}"
+            baseline_raw = _cache_get(baseline_key)
+            if baseline_raw:
+                baseline_val = float(baseline_raw)
+                if baseline_val > 0:
+                    aum_flow_pct = round((total_assets - baseline_val) / baseline_val * 100, 2)
+            else:
+                _cache_set(baseline_key, str(total_assets), 604800)  # 7-day baseline
+
         result = {
             "current_price": getattr(info, "last_price", None),
             "volume": getattr(info, "last_volume", None),
             "market_cap": getattr(info, "market_cap", None),
             "week_52_high": slow_info.get("fiftyTwoWeekHigh") or getattr(info, "year_high", None),
             "week_52_low": slow_info.get("fiftyTwoWeekLow") or getattr(info, "year_low", None),
-            # dividendYield from yfinance is a decimal (0.03 = 3%); cap at 25% to filter bad data
             "dividend_yield": slow_info.get("dividendYield") if slow_info.get("dividendYield") and 0 < slow_info.get("dividendYield") < 0.25 else None,
             "beta": slow_info.get("beta"),
             "pe_ratio": slow_info.get("trailingPE"),
             "expense_ratio": slow_info.get("expenseRatio"),
+            "total_assets": total_assets,
+            "aum_flow_7d_pct": aum_flow_pct,
         }
         if result["current_price"]:
             _cache_set(cache_key, json.dumps(result), 7200)  # 2h — avoid refetch on every hourly build
@@ -244,12 +258,17 @@ def fetch_macro_data() -> dict:
         return json.loads(cached)
 
     series_ids = {
+        # US macro
         "FEDFUNDS": "fed_funds_rate",
         "CPIAUCSL": "cpi",
         "UNRATE": "unemployment",
         "T10Y2Y": "yield_curve",
         "GDP": "gdp",
         "VIXCLS": "vix",
+        # Canadian macro (for .TO tickers)
+        "CPALTT01CAM657N": "ca_cpi",
+        "LRUNTTTTCAM156S": "ca_unemployment",
+        "IRSTCB01CAM156N": "ca_rate",
     }
 
     result = {}
@@ -304,6 +323,100 @@ def fetch_fear_greed() -> dict:
         logger.warning(f"Fear & Greed fetch failed: {e}")
 
     _cache_set(cache_key, json.dumps(result), 21600)  # 6h — index only shifts slowly
+    return result
+
+
+def fetch_cboe_put_call() -> dict:
+    """Fetch CBOE equity put/call ratio — free, no key, strong institutional sentiment signal."""
+    cache_key = "cboe_put_call"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    result = {"available": False, "equity_pcr": None, "signal": "neutral"}
+    try:
+        url = "https://cdn.cboe.com/api/global/us_indices/daily_prices/PCR_History.csv"
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        lines = [l for l in resp.text.strip().split("\n") if l.strip()]
+        # Header: Date, Total, Index, Exchange, Equity
+        last = lines[-1].split(",")
+        if len(last) >= 5:
+            equity_pcr = float(last[4])
+            total_pcr = float(last[1])
+            # Equity P/C >0.85: heavy hedging = institutional fear (bearish)
+            # Equity P/C <0.55: complacency = overbought warning (contrarian bearish)
+            if equity_pcr > 0.85:
+                signal = "bearish"
+            elif equity_pcr < 0.55:
+                signal = "complacent"
+            else:
+                signal = "neutral"
+            result = {
+                "available": True,
+                "equity_pcr": round(equity_pcr, 3),
+                "total_pcr": round(total_pcr, 3),
+                "signal": signal,
+                "date": last[0].strip(),
+            }
+            logger.info(f"CBOE equity P/C: {equity_pcr:.3f} ({signal})")
+    except Exception as e:
+        logger.warning(f"CBOE P/C fetch failed: {e}")
+
+    _cache_set(cache_key, json.dumps(result), 86400)  # 24h — published once per trading day
+    return result
+
+
+def fetch_treasury_yield_curve() -> dict:
+    """Full US Treasury yield curve — free, no key. Provides 3m-10Y spread (best recession signal)."""
+    cache_key = "treasury_yield_curve"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    result = {"available": False}
+    try:
+        year = datetime.now().year
+        url = (
+            f"https://home.treasury.gov/resource-center/data-chart-center/interest-rates/"
+            f"daily-treasury-rates.csv/{year}/all"
+            f"?type=daily_treasury_yield_curve&field_tdr_date_value={year}&submit"
+        )
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        lines = [l for l in resp.text.strip().split("\n") if l.strip()]
+        header = [h.strip().strip('"') for h in lines[0].split(",")]
+        last = [v.strip().strip('"') for v in lines[-1].split(",")]
+
+        def get_col(name):
+            try:
+                return float(last[header.index(name)]) if last[header.index(name)] else None
+            except (ValueError, IndexError):
+                return None
+
+        m3 = get_col("3 Mo")
+        y2 = get_col("2 Yr")
+        y5 = get_col("5 Yr")
+        y10 = get_col("10 Yr")
+        y30 = get_col("30 Yr")
+
+        if y10 is not None and m3 is not None:
+            spread_10y_3m = round(y10 - m3, 3)
+            result = {
+                "available": True,
+                "date": last[0],
+                "3m": m3, "2y": y2, "5y": y5, "10y": y10, "30y": y30,
+                "spread_10y_2y": round(y10 - y2, 3) if y2 else None,
+                "spread_10y_3m": spread_10y_3m,  # Fed's preferred recession indicator
+                "spread_30y_5y": round(y30 - y5, 3) if y30 and y5 else None,
+                "inverted_3m_10y": spread_10y_3m < 0,
+                "inverted_2y_10y": (round(y10 - y2, 3) < 0) if y2 else None,
+            }
+            logger.info(f"Treasury curve: 10Y={y10}% 3m={m3}% spread={spread_10y_3m:+.3f}%")
+    except Exception as e:
+        logger.warning(f"Treasury yield curve fetch failed: {e}")
+
+    _cache_set(cache_key, json.dumps(result), 86400)  # 24h — published once per trading day
     return result
 
 

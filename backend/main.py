@@ -22,6 +22,7 @@ from data_fetcher import (
     fetch_price_history, fetch_price_history_extended, fetch_realtime_quote, fetch_macro_data,
     fetch_news, fetch_reddit_sentiment, fetch_fear_greed, fetch_google_trends,
     fetch_stocktwits, fetch_av_news_sentiment,
+    fetch_cboe_put_call, fetch_treasury_yield_curve,
     prefetch_price_history_batch, invalidate_cache, _cache_get, _cache_set
 )
 from technical import compute_technicals, compute_long_horizon_metrics, compute_investment_scenarios
@@ -111,6 +112,18 @@ def build_forecast_sync() -> dict:
             logger.warning(f"Fear & Greed fetch failed: {e}")
             source_status["fear_greed"] = "error"
 
+        cboe_pcr = {"available": False}
+        try:
+            cboe_pcr = fetch_cboe_put_call()
+        except Exception as e:
+            logger.warning(f"CBOE P/C fetch failed: {e}")
+
+        treasury_curve = {"available": False}
+        try:
+            treasury_curve = fetch_treasury_yield_curve()
+        except Exception as e:
+            logger.warning(f"Treasury yield curve fetch failed: {e}")
+
         all_fund_data = []
 
         for ticker in TICKERS:
@@ -135,7 +148,13 @@ def build_forecast_sync() -> dict:
                     long_df, current_price=quote.get("current_price"),
                     expense_ratio=quote.get("expense_ratio")
                 )
-                macro = score_macro_environment(ticker, macro_data, fear_greed=fear_greed)
+                macro = score_macro_environment(
+                    ticker, macro_data,
+                    fear_greed=fear_greed,
+                    cboe_pcr=cboe_pcr,
+                    treasury_curve=treasury_curve,
+                    quote=quote,
+                )
 
                 news = []
                 try:
