@@ -142,8 +142,8 @@ def log_predictions(fund_list: list[dict]):
             })
 
 
-def get_unevaluated_predictions(min_age_days: int = 7) -> list[dict]:
-    """Return predictions old enough to evaluate that have no outcome yet."""
+def get_unevaluated_predictions(min_age_days: int = 7, horizon_days: int = 7) -> list[dict]:
+    """Return predictions old enough to evaluate that have no outcome for this horizon yet."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
 
     db = _conn()
@@ -157,9 +157,9 @@ def get_unevaluated_predictions(min_age_days: int = 7) -> list[dict]:
                            p.price_at_prediction
                     FROM predictions p
                     LEFT JOIN outcomes o
-                           ON o.prediction_id = p.id AND o.horizon_days = 7
+                           ON o.prediction_id = p.id AND o.horizon_days = %s
                     WHERE p.logged_at < %s AND o.id IS NULL
-                """, (cutoff,))
+                """, (horizon_days, cutoff))
                 cols = ["id","logged_at","ticker","rank",
                         "technical_score","macro_score","sentiment_score","price_at_prediction"]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -169,7 +169,7 @@ def get_unevaluated_predictions(min_age_days: int = 7) -> list[dict]:
         finally:
             db.close()
     else:
-        evaluated_ids = {o["prediction_id"] for o in _outcomes if o.get("horizon_days") == 7}
+        evaluated_ids = {o["prediction_id"] for o in _outcomes if o.get("horizon_days") == horizon_days}
         return [p for p in _predictions
                 if p["logged_at"] < cutoff and p["id"] not in evaluated_ids]
 

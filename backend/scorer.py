@@ -10,25 +10,31 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # Horizon scoring weights
 # ---------------------------------------------------------------------------
 # 7D weights are adaptive — loaded fresh each forecast run from self_improver
-WEIGHTS_30D = {"technical": 0.30, "macro": 0.45, "sentiment": 0.25}
 WEIGHTS_1Y  = {"fundamental": 0.40, "macro": 0.35, "technical": 0.25}
 WEIGHTS_5Y  = {"fundamental": 0.55, "macro": 0.25, "technical": 0.20}
 
-_DEFAULT_WEIGHTS_7D = {"technical": 0.55, "sentiment": 0.30, "macro": 0.15}
+_DEFAULT_WEIGHTS_7D  = {"technical": 0.55, "macro": 0.15, "sentiment": 0.30}
+_DEFAULT_WEIGHTS_30D = {"technical": 0.30, "macro": 0.45, "sentiment": 0.25}
 
 
 def _load_weights_7d() -> dict:
     """Load adaptive 7-day weights; fall back to defaults on any error."""
     try:
         from self_improver import load_weights
-        w = load_weights()
-        return {
-            "technical": w.get("technical", _DEFAULT_WEIGHTS_7D["technical"]),
-            "macro":     w.get("macro",     _DEFAULT_WEIGHTS_7D["macro"]),
-            "sentiment": w.get("sentiment", _DEFAULT_WEIGHTS_7D["sentiment"]),
-        }
+        w = load_weights("7d")
+        return {k: w.get(k, _DEFAULT_WEIGHTS_7D[k]) for k in _DEFAULT_WEIGHTS_7D}
     except Exception:
         return _DEFAULT_WEIGHTS_7D
+
+
+def _load_weights_30d() -> dict:
+    """Load adaptive 30-day weights; fall back to defaults on any error."""
+    try:
+        from self_improver import load_weights
+        w = load_weights("30d")
+        return {k: w.get(k, _DEFAULT_WEIGHTS_30D[k]) for k in _DEFAULT_WEIGHTS_30D}
+    except Exception:
+        return _DEFAULT_WEIGHTS_30D
 
 
 def _confidence_level(tech: float, macro: float, sentiment: float) -> str:
@@ -184,7 +190,7 @@ def rank_funds(all_fund_data: list) -> list:
 
         w = _load_weights_7d()
         fund["score_7d"]  = round(tech*w["technical"] + sentiment*w["sentiment"] + macro_s*w["macro"], 2)
-        w = WEIGHTS_30D
+        w = _load_weights_30d()
         fund["score_30d"] = round(tech*w["technical"] + macro_s*w["macro"] + sentiment*w["sentiment"], 2)
         w = WEIGHTS_1Y
         fund["score_1y"]  = round(fund_1y*w["fundamental"] + macro_s*w["macro"] + tech*w["technical"], 2)
