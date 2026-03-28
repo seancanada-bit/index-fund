@@ -228,6 +228,7 @@ export default function App() {
           onRefresh={handleRefresh}
           refreshing={refreshing}
           lastUpdated={lastUpdated}
+          fundCount={forecast?.total_funds ?? 49}
         />
 
         {cachedAt && !refreshing && <StaleBanner cachedAt={cachedAt} />}

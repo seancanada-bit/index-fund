@@ -14,6 +14,9 @@ FUND_CATEGORIES = {
     "VNQ": "real_estate",
     "GLD": "commodities", "IAU": "commodities", "PDBC": "commodities", "XLE": "commodities",
     "XLF": "financials",
+    # US sector ETFs
+    "XLV": "equity_broad", "XLU": "equity_broad", "XLP": "equity_broad",
+    "XLY": "equity_broad", "XLI": "equity_broad",
     # Canadian funds (.TO)
     "XIU.TO": "equity_broad", "XIC.TO": "equity_broad", "VCN.TO": "equity_broad",
     "HXT.TO": "equity_broad",
@@ -27,6 +30,9 @@ FUND_CATEGORIES = {
     "XRE.TO": "real_estate",
     "TEC.TO": "growth_tech",
     "ZGD.TO": "commodities",
+    # New Canadian funds
+    "ZQQ.TO": "growth_tech", "HGRO.TO": "equity_broad", "VGG.TO": "equity_broad",
+    "XUS.TO": "equity_broad", "ZUQ.TO": "equity_broad",
 }
 
 FUND_NAMES = {
@@ -51,6 +57,12 @@ FUND_NAMES = {
     "BND": "Vanguard Total Bond Market ETF",
     "IAU": "iShares Gold Trust",
     "PDBC": "Invesco Optimum Yield Diversified Commodity Strategy ETF",
+    # US sector ETFs
+    "XLV": "Health Care Select Sector SPDR Fund",
+    "XLU": "Utilities Select Sector SPDR Fund",
+    "XLP": "Consumer Staples Select Sector SPDR Fund",
+    "XLY": "Consumer Discretionary Select Sector SPDR Fund",
+    "XLI": "Industrial Select Sector SPDR Fund",
     # Canadian funds
     "XIU.TO": "iShares S&P/TSX 60 Index ETF",
     "XIC.TO": "iShares Core S&P/TSX Composite ETF",
@@ -71,6 +83,11 @@ FUND_NAMES = {
     "XRE.TO": "iShares S&P/TSX Capped REIT Index ETF",
     "TEC.TO": "TD Global Technology Leaders Index ETF",
     "ZGD.TO": "BMO Equal Weight Global Gold Index ETF",
+    "ZQQ.TO": "Horizons NASDAQ-100 Index ETF",
+    "HGRO.TO": "Horizons Growth ETF Portfolio",
+    "VGG.TO": "Vanguard US Dividend Growth ETF (CAD Hedged)",
+    "XUS.TO": "iShares Core S&P 500 Index ETF (CAD)",
+    "ZUQ.TO": "BMO MSCI USA Quality Factor ETF",
 }
 
 # Currency for each fund — used to set default display in the UI

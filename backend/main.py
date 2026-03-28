@@ -34,9 +34,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 TICKERS = [
-    # US funds
+    # US broad market & themes
     "SPY", "QQQ", "DIA", "IWM", "VTI", "VOO", "ARKK", "GLD", "TLT",
     "EFA", "EEM", "VNQ", "XLF", "XLK", "XLE", "SCHD", "VIG", "BND", "IAU", "PDBC",
+    # US sector ETFs
+    "XLV", "XLU", "XLP", "XLY", "XLI",
     # Canadian funds
     "XIU.TO", "XIC.TO", "VCN.TO", "HXT.TO",
     "XEQT.TO", "XGRO.TO", "VGRO.TO", "VBAL.TO",
@@ -47,6 +49,7 @@ TICKERS = [
     "XRE.TO",
     "TEC.TO",
     "ZGD.TO",
+    "ZQQ.TO", "HGRO.TO", "VGG.TO", "XUS.TO", "ZUQ.TO",
 ]
 
 # Use BackgroundScheduler (runs in a thread, not async) so it never blocks the event loop

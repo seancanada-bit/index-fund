@@ -36,7 +36,7 @@ function formatDate(isoString) {
   }
 }
 
-export default function HeroSection({ onRefresh, refreshing, lastUpdated }) {
+export default function HeroSection({ onRefresh, refreshing, lastUpdated, fundCount = 49 }) {
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
@@ -62,7 +62,7 @@ export default function HeroSection({ onRefresh, refreshing, lastUpdated }) {
               <span className="text-emerald-400">Intelligence</span>
             </h1>
             <p className="mt-3 text-gray-400 font-sans text-sm max-w-xl">
-              {today} &mdash; Adaptive AI rankings across 39 US &amp; Canadian ETFs — scored on technical momentum, macroeconomic signals, and market sentiment over 7-day, 30-day, and multi-year horizons.
+              {today} &mdash; Adaptive AI rankings across {fundCount} US &amp; Canadian ETFs — scored on technical momentum, macroeconomic signals, and market sentiment over 7-day, 30-day, and multi-year horizons.
             </p>
             <p className="mt-1 text-xs text-gray-600 font-sans">
               For informational purposes only. Not financial advice. Past performance does not guarantee future results.
@@ -97,7 +97,7 @@ export default function HeroSection({ onRefresh, refreshing, lastUpdated }) {
         {/* Divider */}
         <div className="mt-8 flex items-center gap-3">
           <div className="flex-1 h-px bg-gradient-to-r from-emerald-800/50 via-gray-700 to-transparent" />
-          <span className="font-mono-data text-xs text-gray-600">39 FUNDS TRACKED</span>
+          <span className="font-mono-data text-xs text-gray-600">{fundCount} FUNDS TRACKED</span>
           <div className="flex-1 h-px bg-gradient-to-l from-emerald-800/50 via-gray-700 to-transparent" />
         </div>
       </motion.div>
