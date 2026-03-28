@@ -480,7 +480,7 @@ def fetch_news(ticker: str, fund_name: str, days: int = 3) -> list:
                     "url": a.get("url", ""),
                 })
         except Exception as e:
-            logger.warning(f"NewsAPI failed for {ticker}: {e}")
+            logger.debug(f"NewsAPI failed for {ticker}: {e}")
 
     # Deduplicate by title
     seen = set()
@@ -679,7 +679,7 @@ def fetch_av_news_sentiment(ticker: str) -> dict:
 
         # Detect rate-limit / info messages
         if "Information" in data or "Note" in data:
-            logger.warning(f"AV News Sentiment quota hit for {ticker}")
+            logger.debug(f"AV News Sentiment quota hit for {ticker}")
             _cache_set(cache_key, json.dumps(result), 3600)   # Short cache — retry later
             return result
 
