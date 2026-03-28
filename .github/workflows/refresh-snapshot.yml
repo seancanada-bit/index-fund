@@ -11,38 +11,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Fetch latest forecast from Render
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch latest forecast from Render (retries through cold start)
         run: |
-          echo "Fetching forecast (allow up to 120s for cold start)..."
-          curl -sf --max-time 120 \
+          echo "Fetching forecast — retrying through Render cold start 503s..."
+          # --retry-all-errors retries on 5xx too (needed for Render cold-start 503)
+          curl -s \
+            --retry 5 \
+            --retry-delay 30 \
+            --retry-all-errors \
+            --max-time 240 \
             "${{ secrets.REACT_APP_API_URL }}/api/forecast" \
-            -o snapshot.json
+            -o snapshot_raw.json
           # Validate: must be JSON with at least one fund
-          FUND_COUNT=$(python3 -c "import json,sys; d=json.load(open('snapshot.json')); print(len(d.get('funds',[])))")
-          echo "✓ Snapshot valid — $FUND_COUNT funds"
+          FUND_COUNT=$(python3 -c "import json; d=json.load(open('snapshot_raw.json')); print(len(d.get('funds',[])))" 2>/dev/null || echo "0")
+          echo "Fund count: $FUND_COUNT"
           if [ "$FUND_COUNT" -eq "0" ]; then
-            echo "No funds in response — aborting to avoid overwriting good data"
+            echo "No funds in response — aborting to preserve existing snapshot"
+            cat snapshot_raw.json | head -c 200
             exit 1
           fi
+          cp snapshot_raw.json frontend/public/snapshot.json
+          echo "✓ Snapshot valid — $FUND_COUNT funds"
 
       - name: Upload snapshot.json to cPanel via FTP
         run: |
-          curl -sS -T snapshot.json \
+          curl -sS -T frontend/public/snapshot.json \
             "ftp://${{ secrets.FTP_HOST }}/snapshot.json" \
             --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" \
             --ftp-create-dirs
           echo "✓ snapshot.json uploaded to cPanel"
 
       - name: Commit snapshot to repo (for inclusion in future builds)
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Save & push snapshot
         run: |
-          cp snapshot.json frontend/public/snapshot.json
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           git add frontend/public/snapshot.json
           git diff --staged --quiet && echo "No changes to snapshot" || \
-            git commit -m "chore: update forecast snapshot [skip ci]" && git push
+            (git commit -m "chore: update forecast snapshot [skip ci]" && git push)

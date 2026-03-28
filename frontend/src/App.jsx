@@ -158,9 +158,9 @@ export default function App() {
 
     if (isRefresh) setRefreshing(true);
 
-    // ── Step 2: fetch live data with a 90-second timeout
+    // ── Step 2: fetch live data — 5 min timeout (cold start + 39-ticker build can take 3-4 min)
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90_000);
+    const timer = setTimeout(() => controller.abort(), 300_000);
 
     try {
       const res = await fetch(`${API_BASE}/api/forecast`, { signal: controller.signal });
@@ -181,8 +181,8 @@ export default function App() {
         if (!hasCachedDataRef.current) {
           setError('Live data is taking longer than usual (Render cold start). Retrying…');
         }
-        // Retry once more after 60 s — Render is usually warm by then
-        setTimeout(() => fetchForecast(true), 60_000);
+        // Retry once more after 30 s — Render is usually warm by then
+        setTimeout(() => fetchForecast(true), 30_000);
       } else {
         if (!hasCachedDataRef.current) setError(err.message || 'Failed to load forecast data. Is the backend running?');
       }
