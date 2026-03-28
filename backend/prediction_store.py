@@ -18,16 +18,34 @@ _outcomes: list[dict] = []
 _weight_history: list[dict] = []
 _next_id = 0
 
+# ── DB circuit-breaker ────────────────────────────────────────────────────────
+# After the first connection failure, skip all subsequent attempts for 5 minutes
+# to avoid spamming logs and blocking the forecast build with 39 parallel timeouts.
+_db_failed_at: Optional[datetime] = None
+_DB_RETRY_INTERVAL = timedelta(minutes=5)
+
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 def _conn():
+    global _db_failed_at
     if not DATABASE_URL:
         return None
+    # Circuit-breaker: if we recently failed, skip immediately
+    if _db_failed_at is not None:
+        if datetime.now(timezone.utc) - _db_failed_at < _DB_RETRY_INTERVAL:
+            return None
+        # Retry window elapsed — try again
+        _db_failed_at = None
     try:
         import psycopg2
-        return psycopg2.connect(DATABASE_URL, connect_timeout=5)
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+        _db_failed_at = None  # success — reset breaker
+        return conn
     except Exception as e:
-        logger.warning(f"DB connect failed: {e}")
+        if _db_failed_at is None:
+            # Log only on the first failure; subsequent failures are silent
+            logger.warning(f"DB connect failed: {e} — falling back to in-memory store (will retry in 5 min)")
+        _db_failed_at = datetime.now(timezone.utc)
         return None
 
 
