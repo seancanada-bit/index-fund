@@ -214,11 +214,12 @@ export default function ForecastCard({ fund, isHero = false, horizon = '7d' }) {
     : activeScore < 40  ? 'glow-red'
     : '';
 
+  const cardBg = activeRank === 1 ? 'bg-card-rank1'
+    : activeRank === 2 ? 'bg-card-rank2'
+    : 'bg-card';
+
   return (
-    <div
-      className={`bg-card rounded-xl p-5 flex flex-col gap-4 ${cardGlow} transition-all`}
-      style={isHero ? { borderColor: 'rgba(16,185,129,0.3)' } : {}}
-    >
+    <div className={`${cardBg} rounded-xl p-5 flex flex-col gap-4 ${cardGlow} transition-all`}>
       {/* Hero crown */}
       {isHero && (
         <div className="flex items-center gap-2 -mb-1">

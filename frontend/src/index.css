@@ -56,6 +56,20 @@
     border: 1px solid #1f2937;
   }
 
+  .bg-card-rank1 {
+    background:
+      radial-gradient(ellipse 110% 65% at 0% 0%, rgba(16, 185, 129, 0.09) 0%, transparent 65%),
+      #111827;
+    border: 1px solid rgba(16, 185, 129, 0.28);
+  }
+
+  .bg-card-rank2 {
+    background:
+      radial-gradient(ellipse 90% 50% at 0% 0%, rgba(16, 185, 129, 0.042) 0%, transparent 55%),
+      #111827;
+    border: 1px solid rgba(16, 185, 129, 0.13);
+  }
+
   .glow-emerald {
     box-shadow: 0 0 24px rgba(16, 185, 129, 0.18), 0 0 0 1px rgba(16, 185, 129, 0.12);
   }
