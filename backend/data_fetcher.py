@@ -209,7 +209,7 @@ def fetch_realtime_quote(ticker: str) -> dict:
             "expense_ratio": slow_info.get("expenseRatio"),
         }
         if result["current_price"]:
-            _cache_set(cache_key, json.dumps(result), 3600)  # 1h
+            _cache_set(cache_key, json.dumps(result), 7200)  # 2h — avoid refetch on every hourly build
             return result
     except Exception as e:
         logger.warning(f"yfinance quote failed for {ticker}: {e}")
