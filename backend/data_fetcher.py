@@ -345,8 +345,8 @@ def fetch_news(ticker: str, fund_name: str, days: int = 3) -> list:
     # Always try yfinance news first (free, no quota)
     articles = fetch_yf_news(ticker)
 
-    # Supplement with NewsAPI if key available
-    if NEWS_API_KEY:
+    # Supplement with NewsAPI if key available — skip .TO tickers (poor coverage) to preserve quota
+    if NEWS_API_KEY and not ticker.endswith(".TO"):
         try:
             from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
             query = f"{ticker} OR {fund_name}"
@@ -378,7 +378,7 @@ def fetch_news(ticker: str, fund_name: str, days: int = 3) -> list:
             seen.add(title)
             unique.append(a)
 
-    _cache_set(cache_key, json.dumps(unique[:25]), 43200)  # 12h — keeps NewsAPI under 100 req/day
+    _cache_set(cache_key, json.dumps(unique[:25]), 86400)  # 24h — keeps NewsAPI well under 100 req/day
     return unique[:25]
 
 

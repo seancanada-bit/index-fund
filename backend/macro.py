@@ -31,7 +31,7 @@ FUND_CATEGORIES = {
     "TEC.TO": "growth_tech",
     "ZGD.TO": "commodities",
     # New Canadian funds
-    "ZQQ.TO": "growth_tech", "HGRO.TO": "equity_broad", "VGG.TO": "equity_broad",
+    "ZQQ.TO": "growth_tech", "VGG.TO": "equity_broad",
     "XUS.TO": "equity_broad", "ZUQ.TO": "equity_broad",
 }
 
@@ -84,7 +84,6 @@ FUND_NAMES = {
     "TEC.TO": "TD Global Technology Leaders Index ETF",
     "ZGD.TO": "BMO Equal Weight Global Gold Index ETF",
     "ZQQ.TO": "Horizons NASDAQ-100 Index ETF",
-    "HGRO.TO": "Horizons Growth ETF Portfolio",
     "VGG.TO": "Vanguard US Dividend Growth ETF (CAD Hedged)",
     "XUS.TO": "iShares Core S&P 500 Index ETF (CAD)",
     "ZUQ.TO": "BMO MSCI USA Quality Factor ETF",

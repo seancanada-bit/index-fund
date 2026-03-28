@@ -49,7 +49,7 @@ TICKERS = [
     "XRE.TO",
     "TEC.TO",
     "ZGD.TO",
-    "ZQQ.TO", "HGRO.TO", "VGG.TO", "XUS.TO", "ZUQ.TO",
+    "ZQQ.TO", "VGG.TO", "XUS.TO", "ZUQ.TO",
 ]
 
 # Use BackgroundScheduler (runs in a thread, not async) so it never blocks the event loop
