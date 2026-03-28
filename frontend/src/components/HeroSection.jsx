@@ -109,4 +109,5 @@ HeroSection.propTypes = {
   onRefresh: PropTypes.func.isRequired,
   refreshing: PropTypes.bool,
   lastUpdated: PropTypes.string,
+  fundCount: PropTypes.number,
 };
