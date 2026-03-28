@@ -64,6 +64,9 @@ export default function HeroSection({ onRefresh, refreshing, lastUpdated, fundCo
             <p className="mt-3 text-gray-400 font-sans text-sm max-w-xl">
               {today} &mdash; Adaptive AI rankings across {fundCount} US &amp; Canadian ETFs — scored on technical momentum, macroeconomic signals, and market sentiment over 7-day, 30-day, and multi-year horizons.
             </p>
+            <p className="mt-2 text-xs text-gray-500 font-sans max-w-xl">
+              Scoring weights adapt over time — every 24 hours, predicted rankings are compared against actual returns and the formula shifts toward whichever signals proved most accurate, with recent outcomes weighted more heavily than older ones.
+            </p>
             <p className="mt-1 text-xs text-gray-600 font-sans">
               For informational purposes only. Not financial advice. Past performance does not guarantee future results.
             </p>
