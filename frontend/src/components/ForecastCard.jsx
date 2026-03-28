@@ -267,7 +267,6 @@ export default function ForecastCard({ fund, isHero = false, horizon = '7d' }) {
       {/* Gauge */}
       <div className="flex flex-col items-center">
         <ScoreGauge score={activeScore} size={gaugeSize} strokeWidth={isHero ? 10 : 8} />
-        <ConsensusCluster technical={technical} macro={macro} sentiment={sentiment} />
       </div>
 
       {/* Sub-score bars (always technical/macro/sentiment for context) */}

@@ -201,7 +201,7 @@ ProjectedRanges.propTypes = {
 export default function InvestmentGrowth({ fund, compact = false }) {
   const [amount, setAmount] = useState(1000);
   const [rawInput, setRawInput] = useState('1,000');
-  const [currency, setCurrency] = useState(fund?.currency || 'USD');
+  const [currency, setCurrency] = useState(fund?.currency || 'CAD');
 
   const sc = fund?.investment_scenarios;
   if (!sc) return null;
