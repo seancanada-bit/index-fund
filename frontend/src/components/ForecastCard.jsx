@@ -36,35 +36,6 @@ function fmt(v, decimals = 1, suffix = '') {
   return `${Number(v).toFixed(decimals)}${suffix}`;
 }
 
-/** T / M / S consensus cluster below gauge */
-function ConsensusCluster({ technical, macro, sentiment }) {
-  const items = [
-    { label: 'T', score: technical?.technical_score ?? 50, title: `Technical: ${(technical?.technical_score ?? 50).toFixed(1)}` },
-    { label: 'M', score: macro?.macro_score ?? 50,         title: `Macro: ${(macro?.macro_score ?? 50).toFixed(1)}` },
-    { label: 'S', score: sentiment?.final_sentiment_score ?? 50, title: `Sentiment: ${(sentiment?.final_sentiment_score ?? 50).toFixed(1)}` },
-  ];
-  return (
-    <div className="flex items-center justify-center gap-1.5 mt-2">
-      {items.map(({ label, score, title }) => {
-        const color = signalColor(score);
-        return (
-          <motion.div
-            key={label}
-            title={title}
-            className="w-6 h-6 rounded flex items-center justify-center"
-            style={{ backgroundColor: color + '22', border: `1px solid ${color}55` }}
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 20, delay: 0.8 }}
-          >
-            <span className="font-mono-data font-bold" style={{ fontSize: 9, color }}>{label}</span>
-          </motion.div>
-        );
-      })}
-    </div>
-  );
-}
-ConsensusCluster.propTypes = { technical: PropTypes.object, macro: PropTypes.object, sentiment: PropTypes.object };
 
 /** Cross-horizon consensus badge */
 function ConsensusBadge({ fund }) {
