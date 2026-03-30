@@ -5,6 +5,9 @@ on:
     - cron: '0 */4 * * *'   # every 4 hours
   workflow_dispatch:          # allow manual trigger
 
+permissions:
+  contents: write
+
 jobs:
   refresh:
     name: Fetch forecast & push snapshot to cPanel
