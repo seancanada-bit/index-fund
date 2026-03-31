@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import PropTypes from 'prop-types';
 import { motion } from 'framer-motion';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const DATA_BASE = process.env.PUBLIC_URL || '';
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -201,8 +201,8 @@ export default function TrackRecord() {
 
   useEffect(() => {
     Promise.all([
-      fetch(`${API_BASE}/api/track-record`).then(r => r.json()).catch(() => null),
-      fetch(`${API_BASE}/api/predictions-status`).then(r => r.json()).catch(() => null),
+      fetch(`${DATA_BASE}/track-record.json`).then(r => r.json()).catch(() => null),
+      fetch(`${DATA_BASE}/predictions-status.json`).then(r => r.json()).catch(() => null),
     ]).then(([trackData, statusData]) => {
       setData(trackData);
       setStatus(statusData);

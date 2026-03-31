@@ -8,8 +8,6 @@ import pandas as pd
 import yfinance as yf
 import requests
 import praw
-import redis as redis_client
-
 logger = logging.getLogger(__name__)
 
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
@@ -18,27 +16,11 @@ FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
 REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "IndexFundForecaster/1.0")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 _mem_cache: dict = {}
 
 
-def _get_redis():
-    try:
-        r = redis_client.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2)
-        r.ping()
-        return r
-    except Exception:
-        return None
-
-
 def _cache_get(key: str) -> Optional[str]:
-    r = _get_redis()
-    if r:
-        try:
-            return r.get(key)
-        except Exception:
-            pass
     entry = _mem_cache.get(key)
     if entry and entry["expires"] > time.time():
         return entry["value"]
@@ -46,13 +28,6 @@ def _cache_get(key: str) -> Optional[str]:
 
 
 def _cache_set(key: str, value: str, ttl: int):
-    r = _get_redis()
-    if r:
-        try:
-            r.setex(key, ttl, value)
-            return
-        except Exception:
-            pass
     _mem_cache[key] = {"value": value, "expires": time.time() + ttl}
 
 
@@ -720,13 +695,4 @@ def fetch_av_news_sentiment(ticker: str) -> dict:
 
 
 def invalidate_cache():
-    r = _get_redis()
-    if r:
-        try:
-            keys = r.keys("*")
-            if keys:
-                r.delete(*keys)
-            return
-        except Exception:
-            pass
     _mem_cache.clear()

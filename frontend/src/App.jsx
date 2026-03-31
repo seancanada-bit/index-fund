@@ -13,19 +13,10 @@ import MarketMoodBar from './components/MarketMoodBar';
 import JumpNav from './components/JumpNav';
 import HorizonSelector from './components/HorizonSelector';
 
-const API_BASE     = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-const SNAPSHOT_URL = (process.env.PUBLIC_URL || '') + '/snapshot.json';
+const DATA_BASE    = process.env.PUBLIC_URL || '';
+const SNAPSHOT_URL = DATA_BASE + '/snapshot.json';
 const CACHE_KEY    = 'iff_forecast_cache';
 const CACHE_TS_KEY = 'iff_forecast_ts';
-
-function timeAgo(isoString) {
-  if (!isoString) return '';
-  const diff = Math.floor((Date.now() - new Date(isoString)) / 1000);
-  if (diff < 60)   return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
 
 function ErrorBanner({ message }) {
   return (
@@ -38,17 +29,6 @@ function ErrorBanner({ message }) {
 }
 ErrorBanner.propTypes = { message: PropTypes.string.isRequired };
 
-function StaleBanner({ cachedAt }) {
-  return (
-    <div className="mx-auto max-w-7xl px-4 mb-4">
-      <div className="bg-amber-900/20 border border-amber-700/30 rounded-lg px-4 py-2 text-amber-400/70 text-xs flex items-center gap-2">
-        <span className="inline-block w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-        Showing snapshot from {timeAgo(cachedAt)} — live data is loading in the background
-      </div>
-    </div>
-  );
-}
-StaleBanner.propTypes = { cachedAt: PropTypes.string.isRequired };
 
 function LoadingSkeleton() {
   return (
@@ -104,10 +84,6 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [sourceStatus, setSourceStatus] = useState({});
   const [horizon, setHorizon] = useState('7d');
-  // cachedAt: ISO string of when we last successfully saved to localStorage
-  // non-null while we're showing stale data waiting for live refresh
-  const [cachedAt, setCachedAt] = useState(null);
-  // ref so fetchForecast can check without being in the dep array (avoids infinite loop)
   const hasCachedDataRef = useRef(false);
 
   const applyData = useCallback((data) => {
@@ -118,73 +94,38 @@ export default function App() {
 
   const fetchForecast = useCallback(async (isRefresh = false) => {
     setError(null);
+    if (isRefresh) setRefreshing(true);
 
-    // ── Step 1: seed UI immediately so no visitor ever sees skeletons
+    // ── Step 1: seed UI from localStorage (returning visitors)
     if (!isRefresh) {
-      let seeded = false;
-
-      // 1a. localStorage — freshest option (returning visitors)
       try {
         const raw = localStorage.getItem(CACHE_KEY);
-        const ts  = localStorage.getItem(CACHE_TS_KEY);
         if (raw) {
           const parsed = JSON.parse(raw);
           if (parsed?.funds?.length > 0) {
             applyData(parsed);
             setLoading(false);
-            setCachedAt(ts || new Date(0).toISOString());
             hasCachedDataRef.current = true;
-            seeded = true;
           }
         }
       } catch (_) {}
-
-      // 1b. Static snapshot.json on cPanel — first-time visitors, no cold start
-      if (!seeded) {
-        try {
-          const snap = await fetch(SNAPSHOT_URL);
-          if (snap.ok) {
-            const snapData = await snap.json();
-            if (snapData?.funds?.length > 0) {
-              applyData(snapData);
-              setLoading(false);
-              setCachedAt(snapData.last_updated || new Date(0).toISOString());
-              hasCachedDataRef.current = true;
-            }
-          }
-        } catch (_) {}
-      }
     }
 
-    if (isRefresh) setRefreshing(true);
-
-    // ── Step 2: fetch live data — 5 min timeout (cold start + 39-ticker build can take 3-4 min)
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 300_000);
-
+    // ── Step 2: fetch snapshot.json (updated every 4h by GitHub Actions)
     try {
-      const res = await fetch(`${API_BASE}/api/forecast`, { signal: controller.signal });
-      clearTimeout(timer);
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const res = await fetch(SNAPSHOT_URL + '?t=' + Date.now());
+      if (!res.ok) throw new Error(`Snapshot returned ${res.status}`);
       const data = await res.json();
 
-      applyData(data);
-      setCachedAt(null);  // live data arrived — hide stale banner
-
-      // Persist for next visit
-      localStorage.setItem(CACHE_KEY, JSON.stringify(data));
-      localStorage.setItem(CACHE_TS_KEY, new Date().toISOString());
+      if (data?.funds?.length > 0) {
+        applyData(data);
+          // Persist for next visit
+        localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+        localStorage.setItem(CACHE_TS_KEY, new Date().toISOString());
+      }
     } catch (err) {
-      clearTimeout(timer);
-      if (err.name === 'AbortError') {
-        // Render still spinning up — if stale data is showing, just add a soft note
-        if (!hasCachedDataRef.current) {
-          setError('Live data is taking longer than usual (Render cold start). Retrying…');
-        }
-        // Retry once more after 30 s — Render is usually warm by then
-        setTimeout(() => fetchForecast(true), 30_000);
-      } else {
-        if (!hasCachedDataRef.current) setError(err.message || 'Failed to load forecast data. Is the backend running?');
+      if (!hasCachedDataRef.current) {
+        setError(err.message || 'Failed to load forecast data.');
       }
     } finally {
       setLoading(false);
@@ -193,15 +134,7 @@ export default function App() {
   }, [applyData]);
 
   const handleRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await fetch(`${API_BASE}/api/refresh`);
-      await new Promise(r => setTimeout(r, 2000));
-      await fetchForecast(true);
-    } catch (err) {
-      setError('Refresh failed: ' + err.message);
-      setRefreshing(false);
-    }
+    await fetchForecast(true);
   }, [fetchForecast]);
 
   useEffect(() => {
@@ -231,7 +164,6 @@ export default function App() {
           fundCount={forecast?.total_funds ?? 49}
         />
 
-        {cachedAt && !refreshing && <StaleBanner cachedAt={cachedAt} />}
         {error && <ErrorBanner message={error} />}
 
         <AnimatePresence mode="wait">

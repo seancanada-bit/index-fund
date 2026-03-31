@@ -1,6 +1,6 @@
 """
 Prediction storage layer.
-Primary: PostgreSQL via DATABASE_URL (Supabase, Render Postgres, etc.)
+Primary: MySQL via MYSQL_HOST/MYSQL_USER/MYSQL_PASS/MYSQL_DB env vars (cPanel)
 Fallback: In-memory store (persists within session, resets on restart)
 """
 import os
@@ -10,7 +10,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+MYSQL_HOST = os.getenv("MYSQL_HOST", "")
+MYSQL_USER = os.getenv("MYSQL_USER", "")
+MYSQL_PASS = os.getenv("MYSQL_PASS", "")
+MYSQL_DB   = os.getenv("MYSQL_DB", "")
 
 # ── In-memory fallback ────────────────────────────────────────────────────────
 _predictions: list[dict] = []
@@ -19,8 +22,6 @@ _weight_history: list[dict] = []
 _next_id = 0
 
 # ── DB circuit-breaker ────────────────────────────────────────────────────────
-# After the first connection failure, skip all subsequent attempts for 5 minutes
-# to avoid spamming logs and blocking the forecast build with 39 parallel timeouts.
 _db_failed_at: Optional[datetime] = None
 _DB_RETRY_INTERVAL = timedelta(minutes=5)
 
@@ -28,68 +29,79 @@ _DB_RETRY_INTERVAL = timedelta(minutes=5)
 # ── DB helpers ────────────────────────────────────────────────────────────────
 def _conn():
     global _db_failed_at
-    if not DATABASE_URL:
+    if not MYSQL_HOST or not MYSQL_USER or not MYSQL_DB:
         return None
-    # Circuit-breaker: if we recently failed, skip immediately
     if _db_failed_at is not None:
         if datetime.now(timezone.utc) - _db_failed_at < _DB_RETRY_INTERVAL:
             return None
-        # Retry window elapsed — try again
         _db_failed_at = None
     try:
-        import psycopg2
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
-        _db_failed_at = None  # success — reset breaker
+        import mysql.connector
+        conn = mysql.connector.connect(
+            host=MYSQL_HOST,
+            user=MYSQL_USER,
+            password=MYSQL_PASS,
+            database=MYSQL_DB,
+            connect_timeout=5,
+        )
+        _db_failed_at = None
         return conn
     except Exception as e:
         if _db_failed_at is None:
-            # Log only on the first failure; subsequent failures are silent
             logger.warning(f"DB connect failed: {e} — falling back to in-memory store (will retry in 5 min)")
         _db_failed_at = datetime.now(timezone.utc)
         return None
 
 
 def _ensure_tables(conn):
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS predictions (
-                id          SERIAL PRIMARY KEY,
-                logged_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                ticker      VARCHAR(10) NOT NULL,
-                rank        INTEGER NOT NULL,
-                composite_score   FLOAT NOT NULL,
-                technical_score   FLOAT NOT NULL,
-                macro_score       FLOAT NOT NULL,
-                sentiment_score   FLOAT NOT NULL,
-                price_at_prediction FLOAT
-            );
-            CREATE TABLE IF NOT EXISTS outcomes (
-                id              SERIAL PRIMARY KEY,
-                prediction_id   INTEGER REFERENCES predictions(id),
-                evaluated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                price_at_eval   FLOAT,
-                actual_return   FLOAT,
-                horizon_days    INTEGER DEFAULT 7
-            );
-            CREATE TABLE IF NOT EXISTS weight_history (
-                id                   SERIAL PRIMARY KEY,
-                recorded_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                technical_weight     FLOAT NOT NULL,
-                macro_weight         FLOAT NOT NULL,
-                sentiment_weight     FLOAT NOT NULL,
-                sample_count         INTEGER,
-                technical_corr       FLOAT,
-                macro_corr           FLOAT,
-                sentiment_corr       FLOAT,
-                notes                TEXT
-            );
-            CREATE TABLE IF NOT EXISTS alert_log (
-                id          SERIAL PRIMARY KEY,
-                ticker      VARCHAR(10) NOT NULL UNIQUE,
-                alerted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-        """)
-        conn.commit()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS predictions (
+            id                  INT AUTO_INCREMENT PRIMARY KEY,
+            logged_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ticker              VARCHAR(10) NOT NULL,
+            `rank`              INT NOT NULL,
+            composite_score     FLOAT NOT NULL,
+            technical_score     FLOAT NOT NULL,
+            macro_score         FLOAT NOT NULL,
+            sentiment_score     FLOAT NOT NULL,
+            price_at_prediction FLOAT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS outcomes (
+            id              INT AUTO_INCREMENT PRIMARY KEY,
+            prediction_id   INT,
+            evaluated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            price_at_eval   FLOAT,
+            actual_return   FLOAT,
+            horizon_days    INT DEFAULT 7,
+            FOREIGN KEY (prediction_id) REFERENCES predictions(id)
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS weight_history (
+            id                INT AUTO_INCREMENT PRIMARY KEY,
+            recorded_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            technical_weight  FLOAT NOT NULL,
+            macro_weight      FLOAT NOT NULL,
+            sentiment_weight  FLOAT NOT NULL,
+            sample_count      INT,
+            technical_corr    FLOAT,
+            macro_corr        FLOAT,
+            sentiment_corr    FLOAT,
+            notes             TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS alert_log (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            ticker      VARCHAR(10) NOT NULL UNIQUE,
+            alerted_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    cur.close()
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -102,25 +114,26 @@ def log_predictions(fund_list: list[dict]):
     if db:
         _ensure_tables(db)
         try:
-            with db.cursor() as cur:
-                for f in fund_list:
-                    cur.execute("""
-                        INSERT INTO predictions
-                            (logged_at, ticker, rank, composite_score,
-                             technical_score, macro_score, sentiment_score, price_at_prediction)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                    """, (
-                        now,
-                        f.get("ticker"),
-                        f.get("rank", 0),
-                        f.get("composite_score", 50),
-                        f.get("technical", {}).get("technical_score", 50),
-                        f.get("macro", {}).get("macro_score", 50),
-                        f.get("sentiment", {}).get("final_sentiment_score", 50),
-                        f.get("current_price"),
-                    ))
+            cur = db.cursor()
+            for f in fund_list:
+                cur.execute("""
+                    INSERT INTO predictions
+                        (logged_at, ticker, `rank`, composite_score,
+                         technical_score, macro_score, sentiment_score, price_at_prediction)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (
+                    now,
+                    f.get("ticker"),
+                    f.get("rank", 0),
+                    f.get("composite_score", 50),
+                    f.get("technical", {}).get("technical_score", 50),
+                    f.get("macro", {}).get("macro_score", 50),
+                    f.get("sentiment", {}).get("final_sentiment_score", 50),
+                    f.get("current_price"),
+                ))
             db.commit()
-            logger.info(f"Logged {len(fund_list)} predictions to Postgres.")
+            cur.close()
+            logger.info(f"Logged {len(fund_list)} predictions to MySQL.")
         except Exception as e:
             logger.error(f"log_predictions DB error: {e}")
             db.rollback()
@@ -150,19 +163,21 @@ def get_unevaluated_predictions(min_age_days: int = 7, horizon_days: int = 7) ->
     if db:
         _ensure_tables(db)
         try:
-            with db.cursor() as cur:
-                cur.execute("""
-                    SELECT p.id, p.logged_at, p.ticker, p.rank,
-                           p.technical_score, p.macro_score, p.sentiment_score,
-                           p.price_at_prediction
-                    FROM predictions p
-                    LEFT JOIN outcomes o
-                           ON o.prediction_id = p.id AND o.horizon_days = %s
-                    WHERE p.logged_at < %s AND o.id IS NULL
-                """, (horizon_days, cutoff))
-                cols = ["id","logged_at","ticker","rank",
-                        "technical_score","macro_score","sentiment_score","price_at_prediction"]
-                return [dict(zip(cols, row)) for row in cur.fetchall()]
+            cur = db.cursor()
+            cur.execute("""
+                SELECT p.id, p.logged_at, p.ticker, p.`rank`,
+                       p.technical_score, p.macro_score, p.sentiment_score,
+                       p.price_at_prediction
+                FROM predictions p
+                LEFT JOIN outcomes o
+                       ON o.prediction_id = p.id AND o.horizon_days = %s
+                WHERE p.logged_at < %s AND o.id IS NULL
+            """, (horizon_days, cutoff))
+            cols = ["id","logged_at","ticker","rank",
+                    "technical_score","macro_score","sentiment_score","price_at_prediction"]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            cur.close()
+            return rows
         except Exception as e:
             logger.error(f"get_unevaluated DB error: {e}")
             return []
@@ -179,13 +194,14 @@ def log_outcome(prediction_id: int, price_at_eval: float, actual_return: float, 
     db = _conn()
     if db:
         try:
-            with db.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO outcomes (prediction_id, evaluated_at, price_at_eval,
-                                         actual_return, horizon_days)
-                    VALUES (%s,%s,%s,%s,%s)
-                """, (prediction_id, now, price_at_eval, actual_return, horizon_days))
+            cur = db.cursor()
+            cur.execute("""
+                INSERT INTO outcomes (prediction_id, evaluated_at, price_at_eval,
+                                     actual_return, horizon_days)
+                VALUES (%s,%s,%s,%s,%s)
+            """, (prediction_id, now, price_at_eval, actual_return, horizon_days))
             db.commit()
+            cur.close()
         except Exception as e:
             logger.error(f"log_outcome DB error: {e}")
             db.rollback()
@@ -206,20 +222,22 @@ def get_evaluated_pairs(limit: int = 500) -> list[dict]:
     db = _conn()
     if db:
         try:
-            with db.cursor() as cur:
-                cur.execute("""
-                    SELECT p.ticker, p.rank, p.technical_score, p.macro_score,
-                           p.sentiment_score, p.composite_score,
-                           o.actual_return, o.horizon_days, p.logged_at
-                    FROM predictions p
-                    JOIN outcomes o ON o.prediction_id = p.id
-                    WHERE o.actual_return IS NOT NULL
-                    ORDER BY p.logged_at DESC
-                    LIMIT %s
-                """, (limit,))
-                cols = ["ticker","rank","technical_score","macro_score","sentiment_score",
-                        "composite_score","actual_return","horizon_days","logged_at"]
-                return [dict(zip(cols, row)) for row in cur.fetchall()]
+            cur = db.cursor()
+            cur.execute("""
+                SELECT p.ticker, p.`rank`, p.technical_score, p.macro_score,
+                       p.sentiment_score, p.composite_score,
+                       o.actual_return, o.horizon_days, p.logged_at
+                FROM predictions p
+                JOIN outcomes o ON o.prediction_id = p.id
+                WHERE o.actual_return IS NOT NULL
+                ORDER BY p.logged_at DESC
+                LIMIT %s
+            """, (limit,))
+            cols = ["ticker","rank","technical_score","macro_score","sentiment_score",
+                    "composite_score","actual_return","horizon_days","logged_at"]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            cur.close()
+            return rows
         except Exception as e:
             logger.error(f"get_evaluated_pairs DB error: {e}")
             return []
@@ -240,24 +258,25 @@ def log_weight_update(weights: dict, correlations: dict, sample_count: int, note
     db = _conn()
     if db:
         try:
-            with db.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO weight_history
-                        (recorded_at, technical_weight, macro_weight, sentiment_weight,
-                         sample_count, technical_corr, macro_corr, sentiment_corr, notes)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """, (
-                    now,
-                    weights.get("technical", 0.40),
-                    weights.get("macro", 0.30),
-                    weights.get("sentiment", 0.30),
-                    sample_count,
-                    correlations.get("technical"),
-                    correlations.get("macro"),
-                    correlations.get("sentiment"),
-                    notes,
-                ))
+            cur = db.cursor()
+            cur.execute("""
+                INSERT INTO weight_history
+                    (recorded_at, technical_weight, macro_weight, sentiment_weight,
+                     sample_count, technical_corr, macro_corr, sentiment_corr, notes)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                now,
+                weights.get("technical", 0.40),
+                weights.get("macro", 0.30),
+                weights.get("sentiment", 0.30),
+                sample_count,
+                correlations.get("technical"),
+                correlations.get("macro"),
+                correlations.get("sentiment"),
+                notes,
+            ))
             db.commit()
+            cur.close()
         except Exception as e:
             logger.error(f"log_weight_update DB error: {e}")
             db.rollback()
@@ -277,20 +296,20 @@ def get_weight_history(limit: int = 50) -> list[dict]:
     db = _conn()
     if db:
         try:
-            with db.cursor() as cur:
-                cur.execute("""
-                    SELECT recorded_at, technical_weight, macro_weight, sentiment_weight,
-                           sample_count, technical_corr, macro_corr, sentiment_corr, notes
-                    FROM weight_history ORDER BY recorded_at DESC LIMIT %s
-                """, (limit,))
-                cols = ["recorded_at","technical_weight","macro_weight","sentiment_weight",
-                        "sample_count","technical_corr","macro_corr","sentiment_corr","notes"]
-                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-                # Serialize datetime for JSON
-                for row in rows:
-                    if hasattr(row.get("recorded_at"), "isoformat"):
-                        row["recorded_at"] = row["recorded_at"].isoformat()
-                return rows
+            cur = db.cursor()
+            cur.execute("""
+                SELECT recorded_at, technical_weight, macro_weight, sentiment_weight,
+                       sample_count, technical_corr, macro_corr, sentiment_corr, notes
+                FROM weight_history ORDER BY recorded_at DESC LIMIT %s
+            """, (limit,))
+            cols = ["recorded_at","technical_weight","macro_weight","sentiment_weight",
+                    "sample_count","technical_corr","macro_corr","sentiment_corr","notes"]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.close()
+            for row in rows:
+                if hasattr(row.get("recorded_at"), "isoformat"):
+                    row["recorded_at"] = row["recorded_at"].isoformat()
+            return rows
         except Exception as e:
             logger.error(f"get_weight_history DB error: {e}")
             return []
@@ -327,7 +346,6 @@ def get_track_record_stats() -> dict:
     best = max(seven_day, key=lambda p: p["actual_return"])
     worst = min(seven_day, key=lambda p: p["actual_return"])
 
-    # Weekly buckets — group by week, check if top-3 outperformed average that week
     from collections import defaultdict
     weeks = defaultdict(list)
     for p in seven_day:
@@ -360,17 +378,17 @@ def get_track_record_stats() -> dict:
 
 # ── Alert cooldown helpers ────────────────────────────────────────────────────
 def get_alert_cooldown(ticker: str):
-    """Return the datetime of the last alert for ticker, or None."""
     db = _conn()
     if db:
         _ensure_tables(db)
         try:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT alerted_at FROM alert_log WHERE ticker = %s", (ticker,)
-                )
-                row = cur.fetchone()
-                return row[0] if row else None
+            cur = db.cursor()
+            cur.execute(
+                "SELECT alerted_at FROM alert_log WHERE ticker = %s", (ticker,)
+            )
+            row = cur.fetchone()
+            cur.close()
+            return row[0] if row else None
         except Exception as e:
             logger.error(f"get_alert_cooldown DB error: {e}")
             return None
@@ -380,18 +398,18 @@ def get_alert_cooldown(ticker: str):
 
 
 def set_alert_cooldown(ticker: str, alerted_at: datetime):
-    """Upsert the alert timestamp for ticker."""
     db = _conn()
     if db:
         _ensure_tables(db)
         try:
-            with db.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO alert_log (ticker, alerted_at)
-                    VALUES (%s, %s)
-                    ON CONFLICT (ticker) DO UPDATE SET alerted_at = EXCLUDED.alerted_at
-                """, (ticker, alerted_at))
+            cur = db.cursor()
+            cur.execute("""
+                INSERT INTO alert_log (ticker, alerted_at)
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE alerted_at = VALUES(alerted_at)
+            """, (ticker, alerted_at))
             db.commit()
+            cur.close()
         except Exception as e:
             logger.error(f"set_alert_cooldown DB error: {e}")
             db.rollback()
@@ -401,66 +419,67 @@ def set_alert_cooldown(ticker: str, alerted_at: datetime):
 
 # ── In-flight predictions status ──────────────────────────────────────────────
 def get_predictions_status() -> dict:
-    """Return in-flight prediction stats for the UI progress panel."""
     now = datetime.now(timezone.utc)
-    EVAL_HORIZON = 7  # days
+    EVAL_HORIZON = 7
 
     db = _conn()
     if db:
         _ensure_tables(db)
         try:
-            with db.cursor() as cur:
-                # Total predictions ever logged
-                cur.execute("SELECT COUNT(*) FROM predictions")
-                total = cur.fetchone()[0]
+            cur = db.cursor()
+            cur.execute("SELECT COUNT(*) FROM predictions")
+            total = cur.fetchone()[0]
 
-                # Oldest unevaluated prediction (determines days-to-first-result)
-                cur.execute("""
-                    SELECT MIN(p.logged_at) FROM predictions p
-                    LEFT JOIN outcomes o ON o.prediction_id = p.id AND o.horizon_days = 7
-                    WHERE o.id IS NULL
-                """)
-                oldest_row = cur.fetchone()
-                oldest = oldest_row[0] if oldest_row else None
+            cur.execute("""
+                SELECT MIN(p.logged_at) FROM predictions p
+                LEFT JOIN outcomes o ON o.prediction_id = p.id AND o.horizon_days = 7
+                WHERE o.id IS NULL
+            """)
+            oldest_row = cur.fetchone()
+            oldest = oldest_row[0] if oldest_row else None
 
-                # Most recent top-3 picks (one row per ticker, latest logged_at)
-                cur.execute("""
-                    SELECT DISTINCT ON (ticker)
-                        ticker, rank, composite_score, price_at_prediction, logged_at
+            # MySQL equivalent of DISTINCT ON — get latest top-3 picks per ticker
+            cur.execute("""
+                SELECT p.ticker, p.`rank`, p.composite_score, p.price_at_prediction, p.logged_at
+                FROM predictions p
+                INNER JOIN (
+                    SELECT ticker, MAX(logged_at) AS max_logged
                     FROM predictions
-                    WHERE rank <= 3
-                    ORDER BY ticker, logged_at DESC
-                """)
-                cols = ["ticker", "rank", "composite_score", "price_at_prediction", "logged_at"]
-                top_picks = []
-                for row in cur.fetchall():
-                    pick = dict(zip(cols, row))
-                    if hasattr(pick.get("logged_at"), "isoformat"):
-                        pick["logged_at"] = pick["logged_at"].isoformat()
-                    top_picks.append(pick)
+                    WHERE `rank` <= 3
+                    GROUP BY ticker
+                ) latest ON p.ticker = latest.ticker AND p.logged_at = latest.max_logged
+                WHERE p.`rank` <= 3
+            """)
+            cols = ["ticker", "rank", "composite_score", "price_at_prediction", "logged_at"]
+            top_picks = []
+            for row in cur.fetchall():
+                pick = dict(zip(cols, row))
+                if hasattr(pick.get("logged_at"), "isoformat"):
+                    pick["logged_at"] = pick["logged_at"].isoformat()
+                top_picks.append(pick)
 
-                # Days until first evaluation
-                days_until = None
-                if oldest:
-                    if oldest.tzinfo is None:
-                        oldest = oldest.replace(tzinfo=timezone.utc)
-                    age_days = (now - oldest).days
-                    days_until = max(0, EVAL_HORIZON - age_days)
+            cur.close()
 
-                return {
-                    "total_logged": total,
-                    "oldest_prediction": oldest.isoformat() if oldest else None,
-                    "days_until_first_eval": days_until,
-                    "eval_horizon_days": EVAL_HORIZON,
-                    "top_picks_in_flight": sorted(top_picks, key=lambda x: x["rank"]),
-                }
+            days_until = None
+            if oldest:
+                if hasattr(oldest, 'tzinfo') and oldest.tzinfo is None:
+                    oldest = oldest.replace(tzinfo=timezone.utc)
+                age_days = (now - oldest).days
+                days_until = max(0, EVAL_HORIZON - age_days)
+
+            return {
+                "total_logged": total,
+                "oldest_prediction": oldest.isoformat() if oldest else None,
+                "days_until_first_eval": days_until,
+                "eval_horizon_days": EVAL_HORIZON,
+                "top_picks_in_flight": sorted(top_picks, key=lambda x: x["rank"]),
+            }
         except Exception as e:
             logger.error(f"get_predictions_status DB error: {e}")
             return {"total_logged": 0, "days_until_first_eval": None, "top_picks_in_flight": []}
         finally:
             db.close()
     else:
-        # In-memory fallback
         total = len(_predictions)
         oldest = min((p["logged_at"] for p in _predictions), default=None)
         days_until = None

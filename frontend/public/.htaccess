@@ -16,13 +16,8 @@
     Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
 
     # Content Security Policy
-    # - default-src 'self': only load resources from same origin by default
-    # - script-src 'self' 'unsafe-inline': React build uses inline scripts
-    # - style-src 'self' 'unsafe-inline': Tailwind uses inline styles
-    # - connect-src: allow Render backend + self (snapshot.json)
-    # - img-src 'self' data:: allow base64 images (charts, icons)
-    # - font-src 'self': local fonts only
-    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.onrender.com; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';"
+    # All data is same-origin (static JSON files on cPanel)
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';"
 </IfModule>
 
 # React Router — rewrite all paths to index.html

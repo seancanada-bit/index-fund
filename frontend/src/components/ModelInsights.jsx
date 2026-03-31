@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import PropTypes from 'prop-types';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const DATA_BASE = process.env.PUBLIC_URL || '';
 
 const COMPONENT_COLOR = {
   technical: '#10b981',
@@ -60,7 +60,7 @@ export default function ModelInsights() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/model-insights`)
+    fetch(`${DATA_BASE}/model-insights.json`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));

@@ -32,7 +32,6 @@ jobs:
         working-directory: frontend
         env:
           PUBLIC_URL: /sandbox/index-fund-forecaster
-          REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
         run: npm run build
 
       - name: Deploy to cPanel via FTP
