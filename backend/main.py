@@ -23,6 +23,7 @@ from data_fetcher import (
     fetch_news, fetch_reddit_sentiment, fetch_fear_greed, fetch_google_trends,
     fetch_stocktwits, fetch_av_news_sentiment,
     fetch_cboe_put_call, fetch_treasury_yield_curve,
+    fetch_cot_positioning, fetch_boc_data, fetch_aaii_sentiment,
     prefetch_price_history_batch, invalidate_cache, _cache_get, _cache_set
 )
 from technical import compute_technicals, compute_long_horizon_metrics, compute_investment_scenarios
@@ -124,6 +125,24 @@ def build_forecast_sync() -> dict:
         except Exception as e:
             logger.warning(f"Treasury yield curve fetch failed: {e}")
 
+        cot = {"available": False}
+        try:
+            cot = fetch_cot_positioning()
+        except Exception as e:
+            logger.warning(f"COT fetch failed: {e}")
+
+        boc = {"available": False}
+        try:
+            boc = fetch_boc_data()
+        except Exception as e:
+            logger.warning(f"BoC data fetch failed: {e}")
+
+        aaii = {"available": False}
+        try:
+            aaii = fetch_aaii_sentiment()
+        except Exception as e:
+            logger.warning(f"AAII sentiment fetch failed: {e}")
+
         all_fund_data = []
 
         for ticker in TICKERS:
@@ -154,6 +173,9 @@ def build_forecast_sync() -> dict:
                     cboe_pcr=cboe_pcr,
                     treasury_curve=treasury_curve,
                     quote=quote,
+                    cot=cot,
+                    boc=boc,
+                    aaii=aaii,
                 )
 
                 news = []

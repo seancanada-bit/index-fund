@@ -104,6 +104,9 @@ def score_macro_environment(
     cboe_pcr: dict = None,
     treasury_curve: dict = None,
     quote: dict = None,
+    cot: dict = None,
+    boc: dict = None,
+    aaii: dict = None,
 ) -> dict:
     category = FUND_CATEGORIES.get(ticker, "equity_broad")
     is_canadian = ticker.endswith(".TO")
@@ -273,6 +276,101 @@ def score_macro_environment(
                     score += 12
                     signals.append({"signal": f"Steep yield curve (3m-10Y={spread_3m10y:+.2f}%)", "direction": "bullish", "impact": +12})
 
+    # --- FRED Credit Spreads (HY OAS) ---
+    hy_oas = macro_data.get("hy_oas")
+    if hy_oas and hy_oas.get("latest") is not None:
+        oas = hy_oas["latest"]
+        oas_prev = hy_oas.get("previous")
+        if oas > 500:  # >500bp = credit stress, recession risk
+            if category in EQUITY_CATS:
+                score -= 18
+                signals.append({"signal": f"HY credit spread={oas:.0f}bp (stress)", "direction": "bearish", "impact": -18})
+            elif category in SAFE_HAVEN_CATS:
+                score += 15
+                signals.append({"signal": f"HY credit spread={oas:.0f}bp (flight to safety)", "direction": "bullish", "impact": +15})
+        elif oas > 400:  # Elevated risk
+            if category in EQUITY_CATS:
+                score -= 10
+                signals.append({"signal": f"HY credit spread={oas:.0f}bp (elevated)", "direction": "bearish", "impact": -10})
+        elif oas < 300 and oas_prev and oas < oas_prev:  # Tightening = risk-on
+            if category in EQUITY_CATS:
+                score += 8
+                signals.append({"signal": f"HY credit spread={oas:.0f}bp (tightening)", "direction": "bullish", "impact": +8})
+
+    # --- Initial Jobless Claims ---
+    claims_data = macro_data.get("initial_claims")
+    if claims_data and claims_data.get("latest") is not None:
+        claims = claims_data["latest"]
+        claims_prev = claims_data.get("previous")
+        if claims > 300000:  # Elevated layoffs
+            if category in EQUITY_CATS:
+                score -= 10
+                signals.append({"signal": f"Jobless claims={claims/1000:.0f}K (elevated)", "direction": "bearish", "impact": -10})
+            elif category in SAFE_HAVEN_CATS:
+                score += 8
+                signals.append({"signal": f"Jobless claims={claims/1000:.0f}K (risk-off)", "direction": "bullish", "impact": +8})
+        elif claims < 200000:  # Very healthy labor market
+            if category in EQUITY_CATS:
+                score += 8
+                signals.append({"signal": f"Jobless claims={claims/1000:.0f}K (strong labor)", "direction": "bullish", "impact": +8})
+
+    # --- CFTC COT Institutional Positioning ---
+    if cot and cot.get("available"):
+        positions = cot.get("positions", {})
+        sp_pos = positions.get("sp500")
+        if sp_pos:
+            am_net = sp_pos.get("asset_mgr_net", 0)
+            lf_net = sp_pos.get("leveraged_net", 0)
+            # Hedge funds extremely short is contrarian bullish
+            if lf_net < -50000:
+                if category in EQUITY_CATS:
+                    score += 12
+                    signals.append({"signal": f"COT: hedge funds net short {lf_net:,} S&P (contrarian bullish)", "direction": "bullish", "impact": +12})
+            elif lf_net > 100000:  # Extremely long — crowded trade
+                if category in EQUITY_CATS:
+                    score -= 8
+                    signals.append({"signal": f"COT: hedge funds net long {lf_net:,} S&P (crowded)", "direction": "bearish", "impact": -8})
+
+        # CAD positioning for Canadian ETFs
+        cad_pos = positions.get("cad")
+        if cad_pos and is_canadian:
+            cad_net = cad_pos.get("asset_mgr_net", 0)
+            if cad_net > 20000:  # Institutions long CAD = bullish for Canadian assets
+                score += 8
+                signals.append({"signal": f"COT: institutions net long CAD ({cad_net:,})", "direction": "bullish", "impact": +8})
+            elif cad_net < -20000:
+                score -= 8
+                signals.append({"signal": f"COT: institutions net short CAD ({cad_net:,})", "direction": "bearish", "impact": -8})
+
+    # --- Bank of Canada USD/CAD ---
+    if boc and boc.get("available") and is_canadian:
+        usd_cad = boc.get("usd_cad")
+        usd_cad_1w = boc.get("usd_cad_1w_ago")
+        if usd_cad and usd_cad_1w:
+            cad_change = ((usd_cad_1w - usd_cad) / usd_cad_1w) * 100  # positive = CAD strengthening
+            if cad_change > 1.0:  # CAD strengthening >1% in a week
+                score += 8
+                signals.append({"signal": f"CAD strengthening {cad_change:+.1f}% (1w)", "direction": "bullish", "impact": +8})
+            elif cad_change < -1.0:  # CAD weakening
+                score -= 6
+                signals.append({"signal": f"CAD weakening {cad_change:+.1f}% (1w)", "direction": "bearish", "impact": -6})
+
+    # --- AAII Investor Sentiment (contrarian) ---
+    if aaii and aaii.get("available"):
+        spread = aaii.get("bull_bear_spread", 0)
+        if spread < -15:  # Extreme bearishness — contrarian bullish
+            if category in EQUITY_CATS:
+                score += 12
+                signals.append({"signal": f"AAII extreme bearish (spread={spread:+.1f}%, contrarian bullish)", "direction": "bullish", "impact": +12})
+        elif spread < -5:
+            if category in EQUITY_CATS:
+                score += 5
+                signals.append({"signal": f"AAII bearish (spread={spread:+.1f}%)", "direction": "bullish", "impact": +5})
+        elif spread > 25:  # Extreme bullishness — contrarian bearish
+            if category in EQUITY_CATS:
+                score -= 8
+                signals.append({"signal": f"AAII extreme bullish (spread={spread:+.1f}%, contrarian bearish)", "direction": "bearish", "impact": -8})
+
     # --- AUM Fund Flows (7-day) ---
     if quote and quote.get("aum_flow_7d_pct") is not None:
         flow = quote["aum_flow_7d_pct"]
@@ -339,6 +437,10 @@ def score_macro_environment(
         "cboe_equity_pcr": cboe_pcr.get("equity_pcr") if cboe_pcr and cboe_pcr.get("available") else None,
         "treasury_spread_3m10y": treasury_curve.get("spread_10y_3m") if treasury_curve and treasury_curve.get("available") else None,
         "aum_flow_7d_pct": quote.get("aum_flow_7d_pct") if quote else None,
+        "hy_oas": hy_oas["latest"] if hy_oas and hy_oas.get("latest") else None,
+        "initial_claims": claims_data["latest"] if claims_data and claims_data.get("latest") else None,
+        "usd_cad": boc.get("usd_cad") if boc and boc.get("available") else None,
+        "aaii_bull_bear_spread": aaii.get("bull_bear_spread") if aaii and aaii.get("available") else None,
         "macro_score": round(macro_score, 2),
         "triggered_signals": signals,
     }

@@ -240,6 +240,11 @@ def fetch_macro_data() -> dict:
         "T10Y2Y": "yield_curve",
         "GDP": "gdp",
         "VIXCLS": "vix",
+        # Credit spreads — best leading indicator of risk-off
+        "BAMLH0A0HYM2": "hy_oas",         # ICE BofA HY OAS
+        "BAMLH0A1HYBB": "bb_spread",       # BB spread
+        # Leading indicators
+        "ICSA": "initial_claims",           # Weekly initial jobless claims
         # Canadian macro (for .TO tickers)
         "CPALTT01CAM657N": "ca_cpi",
         "LRUNTTTTCAM156S": "ca_unemployment",
@@ -310,9 +315,23 @@ def fetch_cboe_put_call() -> dict:
 
     result = {"available": False, "equity_pcr": None, "signal": "neutral"}
     try:
-        url = "https://cdn.cboe.com/api/global/us_indices/daily_prices/PCR_History.csv"
-        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
+        # Try historical data page first (the CDN endpoint started returning 403)
+        urls = [
+            "https://cdn.cboe.com/api/global/us_indices/daily_prices/PCR_History.csv",
+            "https://www.cboe.com/us/options/market_statistics/daily/?mkt=cone&dt=",
+        ]
+        resp = None
+        for url in urls:
+            try:
+                resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+                if "," in resp.text and len(resp.text) > 100:
+                    break
+            except Exception:
+                resp = None
+                continue
+        if resp is None:
+            raise ValueError("All CBOE endpoints failed")
         lines = [l for l in resp.text.strip().split("\n") if l.strip()]
         # Header: Date, Total, Index, Exchange, Equity
         last = lines[-1].split(",")
@@ -691,6 +710,168 @@ def fetch_av_news_sentiment(ticker: str) -> dict:
         logger.warning(f"AV News Sentiment failed for {ticker}: {e}")
 
     _cache_set(cache_key, json.dumps(result), 86400)    # 24h cache — preserve daily quota
+    return result
+
+
+def fetch_cot_positioning() -> dict:
+    """Fetch CFTC Commitments of Traders — institutional positioning in index/currency futures."""
+    cache_key = "cot_positioning"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    result = {"available": False}
+    try:
+        # CFTC Disaggregated Futures-Only report (latest week)
+        year = datetime.now().year
+        url = f"https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
+        resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+
+        import zipfile
+        import io
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+            fname = z.namelist()[0]
+            raw = z.read(fname).decode("utf-8", errors="replace")
+
+        lines = raw.strip().split("\n")
+        header = [h.strip().strip('"') for h in lines[0].split(",")]
+
+        # Find key columns
+        name_idx = next((i for i, h in enumerate(header) if "Market" in h and "Name" in h), 0)
+        # Asset Manager/Institutional longs and shorts
+        am_long_idx = next((i for i, h in enumerate(header) if "Asset Mgr" in h and "Long" in h and "All" not in h), None)
+        am_short_idx = next((i for i, h in enumerate(header) if "Asset Mgr" in h and "Short" in h and "All" not in h), None)
+        # Leveraged Funds (hedge funds) longs and shorts
+        lf_long_idx = next((i for i, h in enumerate(header) if "Lev" in h and "Long" in h and "All" not in h), None)
+        lf_short_idx = next((i for i, h in enumerate(header) if "Lev" in h and "Short" in h and "All" not in h), None)
+
+        if am_long_idx is None:
+            raise ValueError("Could not find Asset Manager columns in COT report")
+
+        # Parse target markets
+        targets = {
+            "S&P 500": "sp500",
+            "E-MINI S&P": "sp500",
+            "NASDAQ": "nasdaq",
+            "RUSSELL": "russell",
+            "CANADIAN DOLLAR": "cad",
+        }
+        positions = {}
+
+        for line in lines[1:]:
+            fields = [f.strip().strip('"') for f in line.split(",")]
+            if len(fields) <= max(am_long_idx, am_short_idx, lf_long_idx or 0, lf_short_idx or 0):
+                continue
+            name = fields[name_idx].upper()
+            for pattern, key in targets.items():
+                if pattern in name and key not in positions:
+                    try:
+                        am_net = int(fields[am_long_idx]) - int(fields[am_short_idx])
+                        lf_net = 0
+                        if lf_long_idx and lf_short_idx:
+                            lf_net = int(fields[lf_long_idx]) - int(fields[lf_short_idx])
+                        positions[key] = {
+                            "asset_mgr_net": am_net,
+                            "leveraged_net": lf_net,
+                        }
+                    except (ValueError, IndexError):
+                        pass
+
+        if positions:
+            result = {"available": True, "positions": positions}
+            logger.info(f"COT positioning loaded: {list(positions.keys())}")
+
+    except Exception as e:
+        logger.warning(f"COT fetch failed: {e}")
+
+    _cache_set(cache_key, json.dumps(result), 86400)  # 24h — published weekly on Friday
+    return result
+
+
+def fetch_boc_data() -> dict:
+    """Fetch Bank of Canada data — USD/CAD rate and policy rate. No API key needed."""
+    cache_key = "boc_data"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    result = {"available": False}
+    try:
+        # USD/CAD exchange rate
+        url = "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=10"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        obs = data.get("observations", [])
+        if obs:
+            latest_fx = float(obs[-1]["FXUSDCAD"]["v"])
+            prev_fx = float(obs[-2]["FXUSDCAD"]["v"]) if len(obs) > 1 else None
+            week_ago_fx = float(obs[-5]["FXUSDCAD"]["v"]) if len(obs) > 4 else None
+            result["usd_cad"] = round(latest_fx, 4)
+            result["usd_cad_prev"] = round(prev_fx, 4) if prev_fx else None
+            result["usd_cad_1w_ago"] = round(week_ago_fx, 4) if week_ago_fx else None
+            result["cad_trend"] = "weakening" if prev_fx and latest_fx > prev_fx else "strengthening"
+            result["available"] = True
+            logger.info(f"BoC USD/CAD: {latest_fx:.4f} (CAD {result['cad_trend']})")
+    except Exception as e:
+        logger.warning(f"BoC data fetch failed: {e}")
+
+    _cache_set(cache_key, json.dumps(result), 21600)  # 6h
+    return result
+
+
+def fetch_aaii_sentiment() -> dict:
+    """Fetch AAII Investor Sentiment Survey — classic contrarian indicator."""
+    cache_key = "aaii_sentiment"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    result = {"available": False}
+    try:
+        # AAII publishes XML/JSON on their site; try scraping the summary page
+        url = "https://www.aaii.com/sentimentsurvey/sent_results"
+        resp = requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        })
+        resp.raise_for_status()
+        text = resp.text
+
+        # Parse percentages from page — look for patterns like "Bullish 25.4%"
+        import re
+        bull_match = re.search(r'Bullish\s*[\s:]*(\d+\.?\d*)\s*%', text)
+        bear_match = re.search(r'Bearish\s*[\s:]*(\d+\.?\d*)\s*%', text)
+        neut_match = re.search(r'Neutral\s*[\s:]*(\d+\.?\d*)\s*%', text)
+
+        if bull_match and bear_match:
+            bull = float(bull_match.group(1))
+            bear = float(bear_match.group(1))
+            neutral = float(neut_match.group(1)) if neut_match else 100 - bull - bear
+            spread = bull - bear
+
+            if spread < -15:
+                signal = "extreme_bearish"
+            elif spread < 0:
+                signal = "bearish"
+            elif spread > 20:
+                signal = "extreme_bullish"
+            else:
+                signal = "neutral"
+
+            result = {
+                "available": True,
+                "bullish": round(bull, 1),
+                "bearish": round(bear, 1),
+                "neutral": round(neutral, 1),
+                "bull_bear_spread": round(spread, 1),
+                "signal": signal,
+            }
+            logger.info(f"AAII Sentiment: Bull={bull:.1f}% Bear={bear:.1f}% Spread={spread:+.1f}%")
+    except Exception as e:
+        logger.debug(f"AAII sentiment fetch failed: {e}")
+
+    _cache_set(cache_key, json.dumps(result), 86400)  # 24h — published weekly
     return result
 
 
