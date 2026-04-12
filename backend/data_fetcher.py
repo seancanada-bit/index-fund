@@ -722,10 +722,10 @@ def fetch_cot_positioning() -> dict:
 
     result = {"available": False}
     try:
-        # CFTC Disaggregated Futures-Only report (latest week)
+        # CFTC Financial Futures-Only report (has equity index + currency futures)
         year = datetime.now().year
-        url = f"https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
-        resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        url = f"https://www.cftc.gov/files/dea/history/fut_fin_txt_{year}.zip"
+        resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
 
         import zipfile
@@ -737,40 +737,35 @@ def fetch_cot_positioning() -> dict:
         lines = raw.strip().split("\n")
         header = [h.strip().strip('"') for h in lines[0].split(",")]
 
-        # Find key columns
-        name_idx = next((i for i, h in enumerate(header) if "Market" in h and "Name" in h), 0)
-        # Asset Manager/Institutional longs and shorts
-        am_long_idx = next((i for i, h in enumerate(header) if "Asset Mgr" in h and "Long" in h and "All" not in h), None)
-        am_short_idx = next((i for i, h in enumerate(header) if "Asset Mgr" in h and "Short" in h and "All" not in h), None)
-        # Leveraged Funds (hedge funds) longs and shorts
-        lf_long_idx = next((i for i, h in enumerate(header) if "Lev" in h and "Long" in h and "All" not in h), None)
-        lf_short_idx = next((i for i, h in enumerate(header) if "Lev" in h and "Short" in h and "All" not in h), None)
+        # Column indices (financial futures report format)
+        name_idx = 0  # Market_and_Exchange_Names
+        am_long_idx = next((i for i, h in enumerate(header) if h == "Asset_Mgr_Positions_Long_All"), None)
+        am_short_idx = next((i for i, h in enumerate(header) if h == "Asset_Mgr_Positions_Short_All"), None)
+        lf_long_idx = next((i for i, h in enumerate(header) if h == "Lev_Money_Positions_Long_All"), None)
+        lf_short_idx = next((i for i, h in enumerate(header) if h == "Lev_Money_Positions_Short_All"), None)
 
         if am_long_idx is None:
-            raise ValueError("Could not find Asset Manager columns in COT report")
+            raise ValueError(f"Could not find Asset_Mgr columns. Headers: {header[:20]}")
 
-        # Parse target markets
+        # Target markets — use most recent row per market (last occurrence wins)
         targets = {
-            "S&P 500": "sp500",
-            "E-MINI S&P": "sp500",
-            "NASDAQ": "nasdaq",
-            "RUSSELL": "russell",
+            "E-MINI S&P 500 -": "sp500",       # Main S&P 500 contract
+            "NASDAQ MINI": "nasdaq",
+            "RUSSELL E-MINI": "russell",
             "CANADIAN DOLLAR": "cad",
         }
         positions = {}
 
         for line in lines[1:]:
             fields = [f.strip().strip('"') for f in line.split(",")]
-            if len(fields) <= max(am_long_idx, am_short_idx, lf_long_idx or 0, lf_short_idx or 0):
+            if len(fields) <= max(am_long_idx, am_short_idx, lf_long_idx, lf_short_idx):
                 continue
             name = fields[name_idx].upper()
             for pattern, key in targets.items():
-                if pattern in name and key not in positions:
+                if pattern in name:
                     try:
                         am_net = int(fields[am_long_idx]) - int(fields[am_short_idx])
-                        lf_net = 0
-                        if lf_long_idx and lf_short_idx:
-                            lf_net = int(fields[lf_long_idx]) - int(fields[lf_short_idx])
+                        lf_net = int(fields[lf_long_idx]) - int(fields[lf_short_idx])
                         positions[key] = {
                             "asset_mgr_net": am_net,
                             "leveraged_net": lf_net,
