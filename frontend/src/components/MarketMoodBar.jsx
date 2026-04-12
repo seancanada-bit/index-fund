@@ -12,6 +12,10 @@ const SOURCE_LABELS = {
   finbert: 'FinBERT',
   fear_greed: 'F&G',
   google_trends: 'Trends',
+  treasury: 'UST',
+  cot: 'COT',
+  boc: 'BoC',
+  aaii: 'AAII',
 };
 
 function LiveClock() {

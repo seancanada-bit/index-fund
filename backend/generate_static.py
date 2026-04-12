@@ -65,6 +65,7 @@ def build_forecast() -> dict:
         "yfinance": "ok", "alpha_vantage": "ok", "fred": "ok",
         "news_api": "ok", "reddit": "ok", "claude_api": "ok",
         "finbert": "ok", "fear_greed": "ok", "google_trends": "ok",
+        "treasury": "ok", "cot": "ok", "boc": "ok", "aaii": "ok",
     }
 
     # Batch prefetch all price histories
@@ -95,32 +96,47 @@ def build_forecast() -> dict:
     cboe_pcr = {"available": False}
     try:
         cboe_pcr = fetch_cboe_put_call()
+        if not cboe_pcr.get("available"):
+            source_status["cboe"] = "degraded"
     except Exception as e:
         logger.warning(f"CBOE P/C fetch failed: {e}")
+        source_status["cboe"] = "error"
 
     treasury_curve = {"available": False}
     try:
         treasury_curve = fetch_treasury_yield_curve()
+        if not treasury_curve.get("available"):
+            source_status["treasury"] = "degraded"
     except Exception as e:
         logger.warning(f"Treasury yield curve fetch failed: {e}")
+        source_status["treasury"] = "error"
 
     cot = {"available": False}
     try:
         cot = fetch_cot_positioning()
+        if not cot.get("available"):
+            source_status["cot"] = "degraded"
     except Exception as e:
         logger.warning(f"COT fetch failed: {e}")
+        source_status["cot"] = "error"
 
     boc = {"available": False}
     try:
         boc = fetch_boc_data()
+        if not boc.get("available"):
+            source_status["boc"] = "degraded"
     except Exception as e:
         logger.warning(f"BoC data fetch failed: {e}")
+        source_status["boc"] = "error"
 
     aaii = {"available": False}
     try:
         aaii = fetch_aaii_sentiment()
+        if not aaii.get("available"):
+            source_status["aaii"] = "degraded"
     except Exception as e:
         logger.warning(f"AAII sentiment fetch failed: {e}")
+        source_status["aaii"] = "error"
 
     all_fund_data = []
 
