@@ -1,0 +1,40 @@
+name: Trading Sim prices
+
+# Fetches daily closes + dividends for the Trading Sim and uploads them to
+# pacificlogo.ca/sandbox/index-fund-forecaster/feed/prices.json.
+# Yahoo Finance blocks the cPanel server, but works from GitHub's runners.
+
+on:
+  schedule:
+    - cron: '30 21 * * 1-5'   # weekdays after the close (1:30 pm PST / 2:30 pm PDT)
+    - cron: '45 */3 * * *'    # every 3 hours, to pick up newly added symbols
+  workflow_dispatch:          # "Run workflow" button for a manual refresh
+
+concurrency:
+  group: trading-sim-prices
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install yfinance
+        run: pip install --quiet yfinance
+
+      - name: Fetch prices
+        run: python trading-sim/fetch_prices.py
+
+      - name: Upload to cPanel via FTP
+        run: |
+          curl -sS -T trading-sim/output/prices.json \
+            "ftp://${{ secrets.FTP_HOST }}/feed/prices.json" \
+            --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" \
+            --ftp-create-dirs
+          echo "Uploaded prices.json ($(du -h trading-sim/output/prices.json | cut -f1))"
